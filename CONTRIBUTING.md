@@ -1,31 +1,28 @@
 # Contributing to NebGov
 
-NebGov is an active open-source project participating in the **Stellar Wave Program** on [Drips Network](https://drips.network/wave). Contributors who solve issues and get PRs merged earn USDC rewards from the Wave reward pool.
+NebGov is an open-source governance framework for the Stellar ecosystem. All contributions are welcome — bug fixes, features, documentation, and tests.
 
 ## How to Contribute
 
 ### 1. Find an issue
 Browse [open issues](https://github.com/nebgov/nebgov/issues). Each issue is tagged with:
-- `complexity: trivial` — 100 Wave points
-- `complexity: medium` — 150 Wave points
-- `complexity: high` — 200 Wave points
+- `complexity: trivial` — small, well-scoped change
+- `complexity: medium` — moderate implementation work
+- `complexity: high` — significant feature or architectural change
 
 Issues tagged `good first issue` are recommended for first-time contributors.
 
-### 2. Apply via Drips
-Visit [drips.network/wave](https://drips.network/wave), find the NebGov repo, and apply to the issue you want to work on. **Do not start work until your application is accepted.**
-
-### 3. Fork and branch
+### 2. Fork and branch
 ```bash
 git checkout -b feat/issue-<number>-<short-description>
 ```
 
-### 4. Implement and test
+### 3. Implement and test
 - Rust contracts: `cargo test --workspace`
 - SDK: `pnpm test:sdk`
 - Frontend: `pnpm test:app`
 
-### 5. Open a PR
+### 4. Open a PR
 - Reference the issue: `Closes #<number>`
 - Describe what you changed and why
 - All CI checks must pass
@@ -51,4 +48,4 @@ Each issue is scoped to be completable in **under one week** by a single contrib
 
 ## Questions?
 
-Open a discussion on GitHub or join the [Stellar Wave Discord](https://discord.gg/t8XBXZAEs5).
+Open a discussion on GitHub.

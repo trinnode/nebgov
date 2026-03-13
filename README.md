@@ -4,7 +4,6 @@
 
 NebGov is the canonical governance framework for the Stellar ecosystem — a modular, auditable, and composable set of smart contracts that any Soroban protocol can plug into to add on-chain governance.
 
-[![Stellar Wave](https://img.shields.io/badge/Stellar%20Wave-Active-blue)](https://drips.network/wave)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![CI](https://github.com/nebgov/nebgov/actions/workflows/rust.yml/badge.svg)](https://github.com/nebgov/nebgov/actions)
 
@@ -68,14 +67,12 @@ propose() → Governor → [voting period] → queue() → Timelock → execute(
 
 ## Contributing
 
-NebGov participates in the **Stellar Wave Program** — contributors who get PRs merged earn USDC rewards.
-
 See [CONTRIBUTING.md](./CONTRIBUTING.md) to get started.
 
 Issues are labeled by complexity:
-- `complexity: trivial` — 100 pts
-- `complexity: medium` — 150 pts
-- `complexity: high` — 200 pts
+- `complexity: trivial`
+- `complexity: medium`
+- `complexity: high`
 
 ---
 
