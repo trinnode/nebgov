@@ -23,6 +23,12 @@ pub trait TimelockTrait {
     fn min_delay(env: Env) -> u64;
 }
 
+/// Cross-contract interface for the Token-Votes contract.
+#[contractclient(name = "VotesTokenClient")]
+pub trait VotesTokenTrait {
+    fn get_past_total_supply(env: Env, ledger: u32) -> i128;
+}
+
 /// Proposal lifecycle states.
 /// TODO issue #1: implement full state machine transitions with timing logic.
 #[contracttype]
@@ -382,8 +388,8 @@ impl GovernorContract {
     /// Get the current state of a proposal.
     ///
     /// After the voting period ends, the proposal is Succeeded when it has at
-    /// least one For vote and more For votes than Against votes (simple
-    /// majority). Quorum via historical token supply is TODO issue #8.
+    /// least one For vote, more For votes than Against votes, and meets the
+    /// quorum requirement (votes_for >= quorum).
     pub fn state(env: Env, proposal_id: u64) -> ProposalState {
         let proposal: Proposal = env
             .storage()
@@ -406,12 +412,41 @@ impl GovernorContract {
             ProposalState::Pending
         } else if current <= proposal.end_ledger {
             ProposalState::Active
-        } else if proposal.votes_for > 0 && proposal.votes_for > proposal.votes_against {
-            // Simple majority — quorum check against total supply is TODO issue #8.
-            ProposalState::Succeeded
         } else {
-            ProposalState::Defeated
+            let quorum = Self::quorum(env.clone(), proposal_id);
+            if proposal.votes_for > proposal.votes_against && proposal.votes_for >= quorum {
+                ProposalState::Succeeded
+            } else {
+                ProposalState::Defeated
+            }
         }
+    }
+
+    /// Calculate the quorum required for a proposal based on the total supply
+    /// at the proposal's start ledger.
+    pub fn quorum(env: Env, proposal_id: u64) -> i128 {
+        let proposal: Proposal = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Proposal(proposal_id))
+            .expect("proposal not found");
+
+        let votes_token_addr: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::VotesToken)
+            .expect("votes token not set");
+
+        let quorum_numerator: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::QuorumNumerator)
+            .unwrap_or(0);
+
+        let votes_token = VotesTokenClient::new(&env, &votes_token_addr);
+        let supply = votes_token.get_past_total_supply(&proposal.start_ledger);
+
+        (supply * quorum_numerator as i128) / 100
     }
 
     /// Get vote counts for a proposal.
@@ -509,7 +544,7 @@ impl GovernorContract {
 mod test {
     use super::*;
     use soroban_sdk::{
-        testutils::{Address as _, Events},
+        testutils::{Address as _, Events, Ledger as _},
         Bytes, Env, Symbol, TryIntoVal,
     };
 
@@ -615,6 +650,45 @@ mod test {
 
         assert_eq!(stored_reason1, Some(reason1));
         assert_eq!(stored_reason2, Some(reason2));
+    }
+
+    #[test]
+    fn test_quorum_and_state() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(GovernorContract, ());
+        let client = GovernorContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let timelock = Address::generate(&env);
+        let proposer = Address::generate(&env);
+        let voter = Address::generate(&env);
+
+        // Deploy and register the actual TokenVotes contract for the test.
+        let token_admin = Address::generate(&env);
+        let underlying_token = Address::generate(&env);
+        let votes_id = env.register(sorogov_token_votes::TokenVotesContract, ());
+        let votes_client = sorogov_token_votes::TokenVotesContractClient::new(&env, &votes_id);
+        votes_client.initialize(&token_admin, &underlying_token);
+
+        // Initialize governor with 50% quorum (50 / 100).
+        client.initialize(&admin, &votes_id, &timelock, &0, &100, &50, &0);
+
+        let proposal_id = propose_dummy(&env, &client, &proposer);
+
+        // Advance ledger to start voting.
+        env.ledger().with_mut(|li| li.sequence_number += 1);
+
+        // cast_vote uses a weight of 1 for now (TODO issue #3).
+        client.cast_vote(&voter, &proposal_id, &VoteSupport::For);
+
+        // Advance ledger to end voting.
+        env.ledger().with_mut(|li| li.sequence_number += 101);
+
+        // If quorum is 0, 1 For vote should succeed.
+        assert_eq!(client.state(&proposal_id), ProposalState::Succeeded);
+        assert_eq!(client.quorum(&proposal_id), 0);
     }
 }
 
