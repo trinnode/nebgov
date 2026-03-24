@@ -10,8 +10,8 @@ use soroban_sdk::{
 pub struct Operation {
     pub target: Address,
     pub data: Bytes,
-    pub fn_name: Symbol,   // function to invoke on the target when executed
-    pub ready_at: u64,     // Unix timestamp when executable
+    pub fn_name: Symbol, // function to invoke on the target when executed
+    pub ready_at: u64,   // Unix timestamp when executable
     pub executed: bool,
     pub cancelled: bool,
 }

@@ -224,13 +224,25 @@
                   "string": "Execute mock governance action"
                 },
                 {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                  "vec": [
+                    {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                    }
+                  ]
                 },
                 {
-                  "symbol": "exec_gov"
+                  "vec": [
+                    {
+                      "symbol": "exec_gov"
+                    }
+                  ]
                 },
                 {
-                  "bytes": "676f7665726e616e63652d70726f706f73616c2d31"
+                  "vec": [
+                    {
+                      "bytes": "676f7665726e616e63652d70726f706f73616c2d31"
+                    }
+                  ]
                 }
               ]
             }
@@ -1242,10 +1254,14 @@
                   "map": [
                     {
                       "key": {
-                        "symbol": "calldata"
+                        "symbol": "calldatas"
                       },
                       "val": {
-                        "bytes": "676f7665726e616e63652d70726f706f73616c2d31"
+                        "vec": [
+                          {
+                            "bytes": "676f7665726e616e63652d70726f706f73616c2d31"
+                          }
+                        ]
                       }
                     },
                     {
@@ -1282,10 +1298,14 @@
                     },
                     {
                       "key": {
-                        "symbol": "fn_name"
+                        "symbol": "fn_names"
                       },
                       "val": {
-                        "symbol": "exec_gov"
+                        "vec": [
+                          {
+                            "symbol": "exec_gov"
+                          }
+                        ]
                       }
                     },
                     {
@@ -1322,10 +1342,14 @@
                     },
                     {
                       "key": {
-                        "symbol": "target"
+                        "symbol": "targets"
                       },
                       "val": {
-                        "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                        "vec": [
+                          {
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                          }
+                        ]
                       }
                     },
                     {

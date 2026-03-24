@@ -230,10 +230,8 @@ impl TokenVotesContract {
             .persistent()
             .set(&DataKey::Checkpoints(account.clone()), &checkpoints);
 
-        env.events().publish(
-            (symbol_short!("v_active"), account),
-            (old_votes, new_votes),
-        );
+        env.events()
+            .publish((symbol_short!("v_active"), account), (old_votes, new_votes));
     }
 
     /// Binary search over an ordered checkpoint list.
@@ -504,7 +502,7 @@ mod tests {
         // Index 1: Update total supply (v_active event might be used if I changed it, wait)
         // Actually, my current update_account_votes emits "v_active"
         // and delegate emits "del_chsh"
-        
+
         let sub_events = events.iter().filter(|e| e.0 == contract_id);
         assert!(sub_events.count() >= 2);
     }
@@ -521,10 +519,10 @@ mod tests {
         let sac_client = token::StellarAssetClient::new(&env, &token_addr);
 
         sac_client.mint(&user1, &1000i128);
-        
+
         // ledger 1: user1 delegations = 1000
         env.ledger().with_mut(|l| l.sequence_number = 1);
-        client.delegate(&user1, &user1); 
+        client.delegate(&user1, &user1);
         assert_eq!(client.get_past_votes(&user1, &1), 1000);
 
         // ledger 10: user1 delegations = 1500
