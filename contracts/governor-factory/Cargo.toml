@@ -14,3 +14,6 @@ soroban-sdk = { workspace = true }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+sorogov-governor = { path = "../governor", features = ["testutils"] }
+sorogov-timelock = { path = "../timelock", features = ["testutils"] }
+sorogov-token-votes = { path = "../token-votes", features = ["testutils"] }
