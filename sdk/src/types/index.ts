@@ -14,6 +14,13 @@ export enum ProposalState {
   Cancelled = "Cancelled",
 }
 
+export class UnknownProposalStateError extends Error {
+  constructor(variant: string) {
+    super(`Unknown proposal state: ${variant}`);
+    this.name = "UnknownProposalStateError";
+  }
+}
+
 export enum VoteSupport {
   Against = 0,
   For = 1,

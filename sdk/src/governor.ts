@@ -16,6 +16,7 @@ import {
   ProposalVotes,
   VoteSupport,
   Network,
+  UnknownProposalStateError,
 } from "./types";
 
 const RPC_URLS: Record<Network, string> = {
@@ -157,8 +158,36 @@ export class GovernorClient {
       .result?.retval;
     if (!raw) throw new Error("No return value");
 
+    return this.decodeProposalState(raw);
+  }
+
+  /**
+   * Decode the Soroban enum ScVal (vector-wrapped symbol) to ProposalState.
+   */
+  private decodeProposalState(raw: xdr.ScVal): ProposalState {
     const native = scValToNative(raw);
-    return native as ProposalState;
+    if (!Array.isArray(native) || native.length === 0) {
+      throw new Error("Invalid ScVal format for ProposalState enum");
+    }
+
+    const variant = native[0];
+    const states: Record<string, ProposalState> = {
+      Pending: ProposalState.Pending,
+      Active: ProposalState.Active,
+      Defeated: ProposalState.Defeated,
+      Succeeded: ProposalState.Succeeded,
+      Queued: ProposalState.Queued,
+      Executed: ProposalState.Executed,
+      Cancelled: ProposalState.Cancelled,
+    };
+
+    // DEBUG: throw info
+
+    if (variant in states) {
+      return states[variant];
+    }
+
+    throw new UnknownProposalStateError(variant);
   }
 
   /**
