@@ -78,6 +78,50 @@ Pages:
 - `/proposal/[id]` — Proposal detail + voting
 - `/treasury` — Treasury balances + pending transactions
 
+## Contract Upgrade Mechanism
+
+The governor contract is upgradeable via an on-chain governance vote. No admin key or multisig can trigger an upgrade directly — the only valid upgrade path is through an executed proposal.
+
+### How It Works
+
+```
+Token holders
+  │
+  ├── propose()  ──► Governor  (calldata: upgrade(new_wasm_hash))
+  │
+  ├── cast_vote() ─► Governor  (quorum + majority reached)
+  │
+  ├── queue() ─────► Timelock  (operation scheduled, delay starts)
+  │
+  └── execute() ───► Timelock  ──► governor.upgrade(new_wasm_hash)
+                                        │
+                                        ▼
+                              env.deployer().update_current_contract_wasm(hash)
+                              (WASM replaced; address, storage, balances intact)
+```
+
+### Authorization
+
+`upgrade` and `migrate` both require `env.current_contract_address().require_auth()`.
+This means the authorised principal must be the governor contract itself — the
+only way to satisfy this in production is through the Timelock's cross-contract
+call during proposal execution. Direct calls from any external account, including
+the stored admin, are rejected.
+
+### Storage Migration
+
+If a future WASM version changes the storage layout, include a call to
+`migrate(MigrateData { ... })` immediately after `upgrade` in the same
+proposal's calldata. The `MigrateData` struct is defined in the contract and
+must be extended with the migration fields before the upgrade is deployed.
+
+### Security Considerations for Upgrades
+
+- Always audit the new WASM before creating an upgrade proposal
+- Pair every storage-breaking change with a `migrate` call in the same proposal
+- The Timelock delay gives token holders time to exit before an upgrade takes effect
+- There is no way to roll back a WASM upgrade once executed; test thoroughly on testnet first
+
 ## Security Considerations
 
 - **Timelock delay**: Set `min_delay` ≥ 24 hours for production deployments

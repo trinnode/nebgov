@@ -1,7 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, Env, String, Vec,
+    contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, String,
 };
 
 /// Proposal lifecycle states.
@@ -32,6 +32,21 @@ pub struct Proposal {
     pub votes_abstain: i128,
     pub executed: bool,
     pub cancelled: bool,
+}
+
+/// Placeholder type for future storage migration data.
+///
+/// When a contract upgrade introduces a breaking change to the on-chain
+/// storage layout, add the required migration values as fields here and
+/// implement the migration logic inside [`GovernorContract::migrate`].
+///
+/// `new_version` is a monotonically increasing counter that callers must
+/// supply so the migration can be applied exactly once per upgrade.
+#[contracttype]
+pub struct MigrateData {
+    /// Monotonically increasing schema version written by this migration.
+    /// Extend this struct with additional fields as the storage layout evolves.
+    pub new_version: u32,
 }
 
 /// Vote support options.
@@ -312,5 +327,129 @@ impl GovernorContract {
     /// Get total proposal count.
     pub fn proposal_count(env: Env) -> u64 {
         env.storage().instance().get(&DataKey::ProposalCount).unwrap_or(0)
+    }
+
+    /// Upgrade the governor contract to a new WASM implementation.
+    ///
+    /// Authorization is restricted to the governor's own contract address.
+    /// This means the call must originate from an executed on-chain proposal:
+    /// the timelock invokes `upgrade` on behalf of a passed vote, with the
+    /// governor contract itself as the authorised principal.
+    ///
+    /// Upgrade flow:
+    ///   1. A proposer creates a proposal whose calldata targets `upgrade(hash)`
+    ///   2. Token holders vote; quorum and majority are reached
+    ///   3. The proposal is queued in the Timelock with the configured delay
+    ///   4. After the delay, anyone triggers execution
+    ///   5. The Timelock calls `governor.upgrade(hash)` as an authorised
+    ///      sub-invocation of the contract's own address
+    ///   6. `env.deployer().update_current_contract_wasm` replaces the WASM;
+    ///      the contract address, balance, and storage all remain intact
+    ///
+    /// If the new WASM changes the storage layout, call `migrate` immediately
+    /// after this in the same proposal's calldata.
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        env.current_contract_address().require_auth();
+        env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
+        env.events().publish((symbol_short!("upgrade"),), new_wasm_hash);
+    }
+
+    /// Migrate contract storage after a WASM upgrade.
+    ///
+    /// Like `upgrade`, this can only be called from the governor's own address
+    /// and must therefore be triggered through an executed on-chain proposal.
+    ///
+    /// This is a no-op stub. When a future upgrade introduces changes to the
+    /// on-chain storage layout, extend [`MigrateData`] with the required
+    /// values and implement the migration logic here.
+    pub fn migrate(env: Env, _data: MigrateData) {
+        env.current_contract_address().require_auth();
+        // TODO: implement storage migration logic when a breaking storage
+        // change is introduced in a future upgrade.
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::{
+        testutils::{Address as _, MockAuth, MockAuthInvoke},
+        BytesN, Env, IntoVal,
+    };
+
+    // ── upgrade ──────────────────────────────────────────────────────────────
+    // Note: a full end-to-end upgrade test (auth passes → WASM swapped) requires
+    // a compiled WASM binary uploaded via env.deployer().upload_contract_wasm().
+    // That path is covered by integration tests run after `cargo build --target
+    // wasm32-unknown-unknown`. The unit tests below focus on the auth guard,
+    // which is the security-critical invariant.
+
+    #[test]
+    #[should_panic]
+    fn upgrade_rejects_caller_that_is_not_the_contract_address() {
+        // Fresh env — no mock_all_auths. We mock auth as a random attacker so
+        // that the contract's own require_auth check finds no matching mock
+        // and panics with an auth error.
+        let env = Env::default();
+        let contract_id = env.register(GovernorContract, ());
+        let client = GovernorContractClient::new(&env, &contract_id);
+
+        let attacker = Address::generate(&env);
+        let new_wasm_hash = BytesN::from_array(&env, &[2u8; 32]);
+
+        // Only `attacker` is mocked, not `contract_id`. upgrade() calls
+        // env.current_contract_address().require_auth() which looks for
+        // (contract_id, "upgrade") — it won't find it and panics.
+        env.mock_auths(&[MockAuth {
+            address: &attacker,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "upgrade",
+                args: (new_wasm_hash.clone(),).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+
+        client.upgrade(&new_wasm_hash);
+    }
+
+    #[test]
+    #[should_panic]
+    fn upgrade_rejects_admin_acting_as_direct_caller() {
+        // Even the stored admin cannot bypass the contract-self auth guard.
+        // The only valid upgrade path is through an executed on-chain proposal.
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let votes_token = Address::generate(&env);
+        let timelock = Address::generate(&env);
+        let contract_id = env.register(GovernorContract, ());
+
+        env.mock_all_auths();
+        GovernorContractClient::new(&env, &contract_id).initialize(
+            &admin,
+            &votes_token,
+            &timelock,
+            &100u32,
+            &1000u32,
+            &40u32,
+            &0i128,
+        );
+
+        let new_wasm_hash = BytesN::from_array(&env, &[3u8; 32]);
+        let client = GovernorContractClient::new(&env, &contract_id);
+
+        // Replace mock_all_auths with a specific mock for admin only.
+        // The upgrade guard requires contract_id, not admin — must panic.
+        env.mock_auths(&[MockAuth {
+            address: &admin,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "upgrade",
+                args: (new_wasm_hash.clone(),).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+
+        client.upgrade(&new_wasm_hash);
     }
 }
