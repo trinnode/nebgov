@@ -97,7 +97,6 @@ impl TokenVotesContract {
     }
 
     /// Get voting power at a past ledger sequence (snapshot).
-    /// TODO issue #9: implement binary search over checkpoints.
     pub fn get_past_votes(env: Env, account: Address, ledger: u32) -> i128 {
         let checkpoints: soroban_sdk::Vec<Checkpoint> = env
             .storage()
@@ -105,17 +104,7 @@ impl TokenVotesContract {
             .get(&DataKey::Checkpoints(account))
             .unwrap_or(soroban_sdk::Vec::new(&env));
 
-        // Linear search fallback — binary search in issue #9.
-        let mut result: i128 = 0;
-        for i in 0..checkpoints.len() {
-            let cp = checkpoints.get(i).unwrap();
-            if cp.ledger <= ledger {
-                result = cp.votes;
-            } else {
-                break;
-            }
-        }
-        result
+        Self::binary_search(&checkpoints, ledger)
     }
 
     /// Get total delegated supply at a past ledger sequence.
@@ -133,7 +122,6 @@ impl TokenVotesContract {
     }
 
     /// Write a checkpoint for an account. Called internally after balance changes.
-    /// TODO issue #9: enforce append-only ordering and merge same-ledger checkpoints.
     pub fn checkpoint(env: Env, account: Address, votes: i128) {
         let mut checkpoints: soroban_sdk::Vec<Checkpoint> = env
             .storage()
@@ -141,10 +129,22 @@ impl TokenVotesContract {
             .get(&DataKey::Checkpoints(account.clone()))
             .unwrap_or(soroban_sdk::Vec::new(&env));
 
-        checkpoints.push_back(Checkpoint {
-            ledger: env.ledger().sequence(),
-            votes,
-        });
+        let current_ledger = env.ledger().sequence();
+        if !checkpoints.is_empty() && checkpoints.last().unwrap().ledger == current_ledger {
+            let last_idx = checkpoints.len() - 1;
+            checkpoints.set(
+                last_idx,
+                Checkpoint {
+                    ledger: current_ledger,
+                    votes,
+                },
+            );
+        } else {
+            checkpoints.push_back(Checkpoint {
+                ledger: current_ledger,
+                votes,
+            });
+        }
 
         env.storage()
             .persistent()
@@ -507,5 +507,47 @@ mod tests {
         
         let sub_events = events.iter().filter(|e| e.0 == contract_id);
         assert!(sub_events.count() >= 2);
+    }
+
+    #[test]
+    fn test_account_binary_search_returns_correct_historical_value() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let user1 = Address::generate(&env);
+
+        let (contract_id, token_addr) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
+
+        sac_client.mint(&user1, &1000i128);
+        
+        // ledger 1: user1 delegations = 1000
+        env.ledger().with_mut(|l| l.sequence_number = 1);
+        client.delegate(&user1, &user1); 
+        assert_eq!(client.get_past_votes(&user1, &1), 1000);
+
+        // ledger 10: user1 delegations = 1500
+        env.ledger().with_mut(|l| l.sequence_number = 10);
+        sac_client.mint(&user1, &500i128);
+        // We must call checkpoint or delegate to update the voting power log.
+        // In a real scenario, the token contract would call this.
+        client.checkpoint(&user1, &1500i128);
+        assert_eq!(client.get_votes(&user1), 1500);
+        assert_eq!(client.get_past_votes(&user1, &10), 1500);
+
+        // ledger 20: user1 delegations = 1300
+        env.ledger().with_mut(|l| l.sequence_number = 20);
+        client.checkpoint(&user1, &1300i128);
+        assert_eq!(client.get_votes(&user1), 1300);
+        assert_eq!(client.get_past_votes(&user1, &20), 1300);
+
+        // Verify history
+        assert_eq!(client.get_past_votes(&user1, &0), 0);
+        assert_eq!(client.get_past_votes(&user1, &5), 1000);
+        assert_eq!(client.get_past_votes(&user1, &10), 1500);
+        assert_eq!(client.get_past_votes(&user1, &15), 1500);
+        assert_eq!(client.get_past_votes(&user1, &20), 1300);
+        assert_eq!(client.get_past_votes(&user1, &100), 1300);
     }
 }
