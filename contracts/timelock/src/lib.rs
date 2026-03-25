@@ -10,8 +10,8 @@ use soroban_sdk::{
 pub struct Operation {
     pub target: Address,
     pub data: Bytes,
-    pub fn_name: Symbol,   // function to invoke on the target when executed
-    pub ready_at: u64,     // Unix timestamp when executable
+    pub fn_name: Symbol, // function to invoke on the target when executed
+    pub ready_at: u64,   // Unix timestamp when executable
     pub executed: bool,
     pub cancelled: bool,
 }
@@ -178,6 +178,22 @@ impl TimelockContract {
             .instance()
             .get(&DataKey::MinDelay)
             .unwrap_or(86400)
+    }
+
+    /// Get the governor address.
+    pub fn governor(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::Governor)
+            .expect("not initialized")
+    }
+
+    /// Get the admin address.
+    pub fn admin(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("not initialized")
     }
 
     /// Update minimum delay. Only admin.

@@ -84,13 +84,25 @@
                   "string": "Test proposal"
                 },
                 {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATYON"
+                  "vec": [
+                    {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATYON"
+                    }
+                  ]
                 },
                 {
-                  "symbol": "noop"
+                  "vec": [
+                    {
+                      "symbol": "exec"
+                    }
+                  ]
                 },
                 {
-                  "bytes": ""
+                  "vec": [
+                    {
+                      "bytes": ""
+                    }
+                  ]
                 }
               ]
             }
@@ -231,10 +243,14 @@
                   "map": [
                     {
                       "key": {
-                        "symbol": "calldata"
+                        "symbol": "calldatas"
                       },
                       "val": {
-                        "bytes": ""
+                        "vec": [
+                          {
+                            "bytes": ""
+                          }
+                        ]
                       }
                     },
                     {
@@ -271,10 +287,14 @@
                     },
                     {
                       "key": {
-                        "symbol": "fn_name"
+                        "symbol": "fn_names"
                       },
                       "val": {
-                        "symbol": "noop"
+                        "vec": [
+                          {
+                            "symbol": "exec"
+                          }
+                        ]
                       }
                     },
                     {
@@ -311,10 +331,14 @@
                     },
                     {
                       "key": {
-                        "symbol": "target"
+                        "symbol": "targets"
                       },
                       "val": {
-                        "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATYON"
+                        "vec": [
+                          {
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATYON"
+                          }
+                        ]
                       }
                     },
                     {

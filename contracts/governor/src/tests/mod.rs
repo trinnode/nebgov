@@ -1,4 +1,5 @@
 mod integration;
+mod transitions;
 
 // ── upgrade auth tests ────────────────────────────────────────────────────────
 // Note: a full end-to-end upgrade test (auth passes → WASM swapped) requires

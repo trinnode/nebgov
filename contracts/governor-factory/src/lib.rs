@@ -1,6 +1,8 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env};
+use soroban_sdk::{
+    contract, contractclient, contractimpl, contracttype, symbol_short, Address, BytesN, Env,
+};
 
 /// Registry entry for a deployed governor.
 #[contracttype]
@@ -23,13 +25,36 @@ pub enum DataKey {
     Admin,
 }
 
+#[contractclient(name = "TokenVotesClient")]
+pub trait TokenVotesTrait {
+    fn initialize(env: Env, admin: Address, token: Address);
+}
+
+#[contractclient(name = "TimelockClient")]
+pub trait TimelockTrait {
+    fn initialize(env: Env, admin: Address, governor: Address, min_delay: u64);
+}
+
+#[contractclient(name = "GovernorClient")]
+pub trait GovernorTrait {
+    fn initialize(
+        env: Env,
+        admin: Address,
+        votes_token: Address,
+        timelock: Address,
+        voting_delay: u32,
+        voting_period: u32,
+        quorum_numerator: u32,
+        proposal_threshold: i128,
+    );
+}
+
 #[contract]
 pub struct GovernorFactoryContract;
 
 #[contractimpl]
 impl GovernorFactoryContract {
     /// Initialize factory with contract WASM hashes.
-    /// TODO issue #21: integrate deployer::deploy() with stored wasm hashes.
     pub fn initialize(
         env: Env,
         admin: Address,
@@ -37,6 +62,9 @@ impl GovernorFactoryContract {
         timelock_wasm: BytesN<32>,
         token_votes_wasm: BytesN<32>,
     ) {
+        if env.storage().instance().has(&DataKey::Admin) {
+            panic!("already initialized");
+        }
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage()
@@ -52,7 +80,6 @@ impl GovernorFactoryContract {
     }
 
     /// Deploy a new governor + timelock pair and register it.
-    /// TODO issue #21: implement actual wasm deployment via env.deployer().
     pub fn deploy(
         env: Env,
         deployer: Address,
@@ -72,16 +99,72 @@ impl GovernorFactoryContract {
             .unwrap_or(0);
         let id = count + 1;
 
-        // TODO: use env.deployer().with_wasm_hash().deploy() for each contract.
-        // Placeholder addresses until issue #21 is implemented.
-        let governor_placeholder = env.current_contract_address();
-        let timelock_placeholder = env.current_contract_address();
+        // Retrieve WASM hashes from storage
+        let governor_wasm: BytesN<32> = env
+            .storage()
+            .instance()
+            .get(&DataKey::GovernorWasm)
+            .expect("governor wasm not set");
+        let timelock_wasm: BytesN<32> = env
+            .storage()
+            .instance()
+            .get(&DataKey::TimelockWasm)
+            .expect("timelock wasm not set");
+        let token_votes_wasm: BytesN<32> = env
+            .storage()
+            .instance()
+            .get(&DataKey::TokenVotesWasm)
+            .expect("token-votes wasm not set");
+
+        // Generate deterministic salts for each contract based on the ID.
+        // This ensures that for a given factory and ID, the addresses are predictable.
+        let id_bytes = id.to_be_bytes();
+        let mut salt_bin = [0u8; 32];
+        salt_bin[0..8].copy_from_slice(&id_bytes);
+
+        // Deploy Token-Votes (salt suffix 1)
+        salt_bin[31] = 1;
+        let token_votes_addr = env
+            .deployer()
+            .with_current_contract(BytesN::from_array(&env, &salt_bin))
+            .deploy(token_votes_wasm);
+
+        // Deploy Timelock (salt suffix 2)
+        salt_bin[31] = 2;
+        let timelock_addr = env
+            .deployer()
+            .with_current_contract(BytesN::from_array(&env, &salt_bin))
+            .deploy(timelock_wasm);
+
+        // Deploy Governor (salt suffix 3)
+        salt_bin[31] = 3;
+        let governor_addr = env
+            .deployer()
+            .with_current_contract(BytesN::from_array(&env, &salt_bin))
+            .deploy(governor_wasm);
+
+        // 1. Initialize Token-Votes with the underlying token
+        TokenVotesClient::new(&env, &token_votes_addr).initialize(&deployer, &token);
+
+        // 2. Initialize Timelock with the Governor address
+        TimelockClient::new(&env, &timelock_addr).initialize(&deployer, &governor_addr, &timelock_delay);
+
+        // 3. Initialize Governor with Token-Votes and Timelock addresses
+        GovernorClient::new(&env, &governor_addr).initialize(
+            &deployer,
+            &token_votes_addr,
+            &timelock_addr,
+            &voting_delay,
+            &voting_period,
+            &quorum_numerator,
+            &proposal_threshold,
+        );
 
         let entry = GovernorEntry {
             id,
-            governor: governor_placeholder,
-            timelock: timelock_placeholder,
-            token,
+            governor: governor_addr,
+            timelock: timelock_addr,
+            token: token_votes_addr,
             deployer,
         };
 
@@ -111,3 +194,6 @@ impl GovernorFactoryContract {
             .unwrap_or(0)
     }
 }
+
+#[cfg(test)]
+mod tests;

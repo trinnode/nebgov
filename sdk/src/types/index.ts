@@ -14,6 +14,13 @@ export enum ProposalState {
   Cancelled = "Cancelled",
 }
 
+export class UnknownProposalStateError extends Error {
+  constructor(variant: string) {
+    super(`Unknown proposal state: ${variant}`);
+    this.name = "UnknownProposalStateError";
+  }
+}
+
 export enum VoteSupport {
   Against = 0,
   For = 1,
@@ -31,6 +38,13 @@ export interface Proposal {
   votesAbstain: bigint;
   executed: boolean;
   cancelled: boolean;
+}
+
+export interface ProposalInput {
+  description: string;
+  target: string;
+  fnName: string;
+  calldata: Buffer | Uint8Array;
 }
 
 export interface ProposalVotes {

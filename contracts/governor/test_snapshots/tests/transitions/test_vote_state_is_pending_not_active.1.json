@@ -25,18 +25,18 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
                 },
                 {
+                  "u32": 10
+                },
+                {
                   "u32": 100
                 },
                 {
-                  "u32": 1000
-                },
-                {
-                  "u32": 50
+                  "u32": 0
                 },
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 1000
+                    "lo": 0
                   }
                 }
               ]
@@ -96,7 +96,7 @@
           "function": {
             "contract_fn": {
               "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-              "function_name": "cast_vote_with_reason",
+              "function_name": "cast_vote",
               "args": [
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
@@ -110,9 +110,6 @@
                       "symbol": "For"
                     }
                   ]
-                },
-                {
-                  "string": "I support this because it improves governance"
                 }
               ]
             }
@@ -254,7 +251,7 @@
                         "symbol": "end_ledger"
                       },
                       "val": {
-                        "u32": 1100
+                        "u32": 110
                       }
                     },
                     {
@@ -306,7 +303,7 @@
                         "symbol": "start_ledger"
                       },
                       "val": {
-                        "u32": 100
+                        "u32": 10
                       }
                     },
                     {
@@ -355,57 +352,6 @@
                       }
                     }
                   ]
-                }
-              }
-            },
-            "ext": "v0"
-          },
-          4095
-        ]
-      ],
-      [
-        {
-          "contract_data": {
-            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-            "key": {
-              "vec": [
-                {
-                  "symbol": "VoteReason"
-                },
-                {
-                  "u64": 1
-                },
-                {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
-                }
-              ]
-            },
-            "durability": "persistent"
-          }
-        },
-        [
-          {
-            "last_modified_ledger_seq": 0,
-            "data": {
-              "contract_data": {
-                "ext": "v0",
-                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-                "key": {
-                  "vec": [
-                    {
-                      "symbol": "VoteReason"
-                    },
-                    {
-                      "u64": 1
-                    },
-                    {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
-                    }
-                  ]
-                },
-                "durability": "persistent",
-                "val": {
-                  "string": "I support this because it improves governance"
                 }
               }
             },
@@ -472,7 +418,7 @@
                         "val": {
                           "i128": {
                             "hi": 0,
-                            "lo": 1000
+                            "lo": 0
                           }
                         }
                       },
@@ -485,7 +431,7 @@
                           ]
                         },
                         "val": {
-                          "u32": 50
+                          "u32": 0
                         }
                       },
                       {
@@ -521,7 +467,7 @@
                           ]
                         },
                         "val": {
-                          "u32": 100
+                          "u32": 10
                         }
                       },
                       {
@@ -533,7 +479,7 @@
                           ]
                         },
                         "val": {
-                          "u32": 1000
+                          "u32": 100
                         }
                       }
                     ]

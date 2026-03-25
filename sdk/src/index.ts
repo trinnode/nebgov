@@ -15,4 +15,10 @@
 export { GovernorClient } from "./governor";
 export { VotesClient } from "./votes";
 export { TimelockClient } from "./timelock";
+export {
+  subscribeToProposals,
+  subscribeToVotes,
+  getProposalEvents,
+} from "./events";
+export type { SorobanEvent, SubscriptionOptions } from "./events";
 export * from "./types";
