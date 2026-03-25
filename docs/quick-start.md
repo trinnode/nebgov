@@ -16,7 +16,32 @@ git clone https://github.com/nebgov/nebgov
 cd nebgov
 ```
 
-## 2. Build contracts
+## 2. Automated deploy (recommended)
+
+The fastest way to get all contracts deployed and initialized:
+
+```bash
+cp .env.example .env.testnet   # adjust defaults if desired
+./scripts/deploy-testnet.sh
+```
+
+The script will:
+1. Build all WASM contracts
+2. Create and fund a testnet identity (if needed)
+3. Deploy contracts in dependency order: token-votes → timelock → governor → treasury → factory
+4. Initialize each contract with sensible defaults
+5. Write the deployed addresses to `.env.testnet`
+
+Re-run the script at any time — it skips already-deployed contracts.
+
+> **Tip:** Override defaults by editing `.env.testnet` before running the
+> script, or pass `ENV_FILE=path/to/file ./scripts/deploy-testnet.sh`.
+
+## 3. Manual deploy
+
+If you prefer to deploy step by step, follow the sections below.
+
+### 3a. Build contracts
 
 ```bash
 cargo build --release --target wasm32-unknown-unknown
@@ -24,14 +49,14 @@ cargo build --release --target wasm32-unknown-unknown
 
 Compiled WASM files will be in `target/wasm32-unknown-unknown/release/`.
 
-## 3. Set up your identity
+### 3b. Set up your identity
 
 ```bash
 stellar keys generate --global deployer --network testnet
 stellar keys fund deployer --network testnet
 ```
 
-## 4. Deploy the token-votes contract
+### 3c. Deploy the token-votes contract
 
 ```bash
 stellar contract deploy \
@@ -45,7 +70,7 @@ stellar contract deploy \
 
 Save the output address as `VOTES_ADDRESS`.
 
-## 5. Deploy the timelock contract
+### 3d. Deploy the timelock contract
 
 ```bash
 stellar contract deploy \
@@ -60,7 +85,7 @@ stellar contract deploy \
 
 Save the output address as `TIMELOCK_ADDRESS`.
 
-## 6. Deploy the governor contract
+### 3e. Deploy the governor contract
 
 ```bash
 stellar contract deploy \
@@ -79,7 +104,7 @@ stellar contract deploy \
 
 Save the output address as `GOVERNOR_ADDRESS`.
 
-## 7. Create your first proposal (SDK)
+## 4. Create your first proposal (SDK)
 
 ```typescript
 import { GovernorClient, VoteSupport } from "@nebgov/sdk";
@@ -104,7 +129,7 @@ const proposalId = await client.propose(signer, "My first proposal");
 console.log("Created proposal:", proposalId);
 ```
 
-## 8. Run the frontend
+## 5. Run the frontend
 
 ```bash
 pnpm install
