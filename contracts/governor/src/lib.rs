@@ -2,7 +2,7 @@
 
 use soroban_sdk::{
     contract, contractclient, contractimpl, contracttype, symbol_short, Address, Bytes, BytesN,
-    Env, String, Symbol,
+    Env, String, Symbol, Vec,
 };
 
 /// Cross-contract interface for the Timelock contract.
@@ -21,6 +21,18 @@ pub trait TimelockTrait {
     ) -> Bytes;
     fn execute(env: Env, caller: Address, op_id: Bytes);
     fn min_delay(env: Env) -> u64;
+}
+
+/// Cross-contract interface for the TokenVotes contract.
+///
+/// The governor uses this to check voting power when creating proposals and
+/// casting votes.
+#[contractclient(name = "VotesClient")]
+pub trait VotesTrait {
+    /// Get current voting power of an account.
+    fn get_votes(env: Env, account: Address) -> i128;
+    /// Get voting power at a past ledger sequence (snapshot).
+    fn get_past_votes(env: Env, account: Address, ledger: u32) -> i128;
 }
 
 /// Proposal lifecycle states.
@@ -44,14 +56,14 @@ pub struct Proposal {
     pub id: u64,
     pub proposer: Address,
     pub description: String,
-    /// Contract address that will be invoked when the proposal executes.
-    pub target: Address,
-    /// Function on `target` to call on execution (no-arg convention; full
-    /// calldata-with-args encoding is TODO issue #6).
-    pub fn_name: Symbol,
-    /// Arbitrary bytes forwarded to the timelock alongside the target. Used
-    /// to compute the operation id and, in future, to pass structured args.
-    pub calldata: Bytes,
+    /// Contract addresses that will be invoked when the proposal executes.
+    pub targets: Vec<Address>,
+    /// Function names invoked on each target. Each element corresponds to the
+    /// target at the same index.
+    pub fn_names: Vec<Symbol>,
+    /// Calldata bytes for each target. Each element corresponds to the target
+    /// at the same index.
+    pub calldatas: Vec<Bytes>,
     pub start_ledger: u32,
     pub end_ledger: u32,
     pub votes_for: i128,
@@ -143,19 +155,51 @@ impl GovernorContract {
 
     /// Create a new governance proposal.
     ///
-    /// `target` and `fn_name` identify the contract function to invoke if the
-    /// proposal succeeds and is executed via the timelock. `calldata` is
-    /// forwarded to the timelock's schedule call and used to derive the
-    /// operation id. TODO issue #2: add threshold check.
+    /// `targets` and `calldatas` specify the on-chain actions to execute if
+    /// the proposal passes. Each element in `targets` is a contract address,
+    /// and the corresponding element in `calldatas` contains the encoded
+    /// function call data.
+    ///
+    /// Before creating the proposal, this function verifies that the proposer
+    /// has sufficient voting power to meet the `proposal_threshold`.
     pub fn propose(
         env: Env,
         proposer: Address,
         description: String,
-        target: Address,
-        fn_name: Symbol,
-        calldata: Bytes,
+        targets: Vec<Address>,
+        fn_names: Vec<Symbol>,
+        calldatas: Vec<Bytes>,
     ) -> u64 {
         proposer.require_auth();
+
+        // Validate all vectors have the same length
+        assert!(
+            targets.len() == fn_names.len() && targets.len() == calldatas.len(),
+            "targets, fn_names, and calldatas length mismatch"
+        );
+        assert!(!targets.is_empty(), "must have at least one target");
+
+        // Get the voting power of the proposer from the token_votes contract
+        let votes_token: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::VotesToken)
+            .expect("votes token not set");
+
+        let votes_client = VotesClient::new(&env, &votes_token);
+        let proposer_votes = votes_client.get_votes(&proposer);
+
+        // Enforce proposal threshold
+        let threshold: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ProposalThreshold)
+            .unwrap_or(0);
+
+        assert!(
+            proposer_votes >= threshold,
+            "proposer votes below threshold"
+        );
 
         let count: u64 = env
             .storage()
@@ -179,10 +223,10 @@ impl GovernorContract {
         let proposal = Proposal {
             id: proposal_id,
             proposer: proposer.clone(),
-            description,
-            target,
-            fn_name,
-            calldata,
+            description: description.clone(),
+            targets: targets.clone(),
+            fn_names: fn_names.clone(),
+            calldatas: calldatas.clone(),
             start_ledger: current + voting_delay,
             end_ledger: current + voting_delay + voting_period,
             votes_for: 0,
@@ -200,8 +244,19 @@ impl GovernorContract {
             .instance()
             .set(&DataKey::ProposalCount, &proposal_id);
 
-        env.events()
-            .publish((symbol_short!("propose"), proposer), proposal_id);
+        // Emit ProposalCreated event with all proposal fields
+        env.events().publish(
+            (symbol_short!("prop_crtd"), proposer.clone()),
+            (
+                proposal_id,
+                description,
+                targets,
+                fn_names,
+                calldatas,
+                current + voting_delay,
+                current + voting_delay + voting_period,
+            ),
+        );
 
         proposal_id
     }
@@ -271,6 +326,9 @@ impl GovernorContract {
     /// Reads the timelock's configured `min_delay` and schedules the proposal's
     /// target invocation. The returned op-id is stored so `execute()` can
     /// reference it later.
+    ///
+    /// TODO issue #6: support multi-action proposals by scheduling all targets.
+    /// Currently only the first target/calldata is queued.
     pub fn queue(env: Env, proposal_id: u64) {
         assert!(
             Self::state(env.clone(), proposal_id) == ProposalState::Succeeded,
@@ -291,16 +349,18 @@ impl GovernorContract {
         let gov_addr = env.current_contract_address();
         let timelock = TimelockClient::new(&env, &timelock_addr);
 
+        // For now, only queue the first action. Multi-action proposals will be
+        // supported in a future issue.
+        assert!(!proposal.targets.is_empty(), "no targets in proposal");
+        let target = proposal.targets.get(0).unwrap();
+        let fn_name = proposal.fn_names.get(0).unwrap();
+        let calldata = proposal.calldatas.get(0).unwrap();
+
         // Use the timelock's own minimum delay to guarantee the configured
         // execution window is respected.
         let delay = timelock.min_delay();
-        let op_id = timelock.schedule(
-            &gov_addr,
-            &proposal.target,
-            &proposal.calldata,
-            &proposal.fn_name,
-            &delay,
-        );
+
+        let op_id = timelock.schedule(&gov_addr, &target, &calldata, &fn_name, &delay);
 
         env.storage()
             .persistent()
@@ -489,8 +549,10 @@ impl GovernorContract {
     /// after this in the same proposal's calldata.
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
         env.current_contract_address().require_auth();
-        env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
-        env.events().publish((symbol_short!("upgrade"),), new_wasm_hash);
+        env.deployer()
+            .update_current_contract_wasm(new_wasm_hash.clone());
+        env.events()
+            .publish((symbol_short!("upgrade"),), new_wasm_hash);
     }
 
     /// Migrate contract storage after a WASM upgrade.
@@ -512,23 +574,44 @@ impl GovernorContract {
 mod test {
     use super::*;
     use soroban_sdk::{
+        contract, contractimpl,
         testutils::{Address as _, Events},
-        Bytes, Env, Symbol, TryIntoVal,
+        Bytes, Env, TryIntoVal,
     };
+
+    /// Mock votes contract that returns a high vote count for any address,
+    /// allowing propose() to pass the threshold check in unit tests.
+    #[contract]
+    pub struct MockVotesContract;
+
+    #[contractimpl]
+    impl MockVotesContract {
+        pub fn get_votes(_env: Env, _account: Address) -> i128 {
+            // Return a high vote count that exceeds any reasonable threshold
+            1_000_000
+        }
+    }
 
     /// Shared helper: initialize the governor and return a proposal id using a
     /// dummy target so the existing vote-with-reason tests remain focused on
     /// their specific behaviour without needing a real timelock or target.
-    fn propose_dummy(
-        env: &Env,
-        client: &GovernorContractClient,
-        proposer: &Address,
-    ) -> u64 {
+    fn propose_dummy(env: &Env, client: &GovernorContractClient, proposer: &Address) -> u64 {
         let target = Address::generate(env);
-        let fn_name = Symbol::new(env, "noop");
+        let fn_name = Symbol::new(env, "exec");
         let calldata = Bytes::new(env);
         let description = String::from_str(env, "Test proposal");
-        client.propose(proposer, &description, &target, &fn_name, &calldata)
+
+        // Create Vec with single target, fn_name, and calldata
+        let mut targets = soroban_sdk::Vec::new(env);
+        targets.push_back(target);
+
+        let mut fn_names = soroban_sdk::Vec::new(env);
+        fn_names.push_back(fn_name);
+
+        let mut calldatas = soroban_sdk::Vec::new(env);
+        calldatas.push_back(calldata);
+
+        client.propose(proposer, &description, &targets, &fn_names, &calldatas)
     }
 
     #[test]
@@ -539,12 +622,12 @@ mod test {
         let client = GovernorContractClient::new(&env, &contract_id);
 
         let admin = Address::generate(&env);
-        let votes_token = Address::generate(&env);
+        let votes_token_id = env.register(MockVotesContract, ());
         let timelock = Address::generate(&env);
         let proposer = Address::generate(&env);
         let voter = Address::generate(&env);
 
-        client.initialize(&admin, &votes_token, &timelock, &100, &1000, &50, &1000);
+        client.initialize(&admin, &votes_token_id, &timelock, &100, &1000, &50, &1000);
 
         let proposal_id = propose_dummy(&env, &client, &proposer);
 
@@ -563,12 +646,12 @@ mod test {
         let client = GovernorContractClient::new(&env, &contract_id);
 
         let admin = Address::generate(&env);
-        let votes_token = Address::generate(&env);
+        let votes_token_id = env.register(MockVotesContract, ());
         let timelock = Address::generate(&env);
         let proposer = Address::generate(&env);
         let voter = Address::generate(&env);
 
-        client.initialize(&admin, &votes_token, &timelock, &100, &1000, &50, &1000);
+        client.initialize(&admin, &votes_token_id, &timelock, &100, &1000, &50, &1000);
 
         let proposal_id = propose_dummy(&env, &client, &proposer);
 
@@ -597,13 +680,13 @@ mod test {
         let client = GovernorContractClient::new(&env, &contract_id);
 
         let admin = Address::generate(&env);
-        let votes_token = Address::generate(&env);
+        let votes_token_id = env.register(MockVotesContract, ());
         let timelock = Address::generate(&env);
         let proposer = Address::generate(&env);
         let voter1 = Address::generate(&env);
         let voter2 = Address::generate(&env);
 
-        client.initialize(&admin, &votes_token, &timelock, &100, &1000, &50, &1000);
+        client.initialize(&admin, &votes_token_id, &timelock, &100, &1000, &50, &1000);
 
         let proposal_id = propose_dummy(&env, &client, &proposer);
 
@@ -618,6 +701,108 @@ mod test {
 
         assert_eq!(stored_reason1, Some(reason1));
         assert_eq!(stored_reason2, Some(reason2));
+    }
+
+    #[test]
+    fn test_propose_with_multiple_targets() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(GovernorContract, ());
+        let client = GovernorContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let proposer = Address::generate(&env);
+        let votes_token_id = env.register(MockVotesContract, ());
+        let timelock = Address::generate(&env);
+
+        // Set threshold to 100
+        client.initialize(&admin, &votes_token_id, &timelock, &100, &1000, &50, &100);
+
+        // Create proposal with multiple targets
+        let target1 = Address::generate(&env);
+        let target2 = Address::generate(&env);
+        let fn_name1 = Symbol::new(&env, "action1");
+        let fn_name2 = Symbol::new(&env, "action2");
+        let calldata1 = Bytes::from_slice(&env, &[1, 2, 3]);
+        let calldata2 = Bytes::from_slice(&env, &[4, 5, 6]);
+        let description = String::from_str(&env, "Multi-target proposal");
+
+        let mut targets = soroban_sdk::Vec::new(&env);
+        targets.push_back(target1.clone());
+        targets.push_back(target2.clone());
+
+        let mut fn_names = soroban_sdk::Vec::new(&env);
+        fn_names.push_back(fn_name1.clone());
+        fn_names.push_back(fn_name2.clone());
+
+        let mut calldatas = soroban_sdk::Vec::new(&env);
+        calldatas.push_back(calldata1.clone());
+        calldatas.push_back(calldata2.clone());
+
+        let proposal_id = client.propose(&proposer, &description, &targets, &fn_names, &calldatas);
+
+        // Verify proposal was created
+        assert_eq!(proposal_id, 1);
+        assert_eq!(client.proposal_count(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "targets, fn_names, and calldatas length mismatch")]
+    fn test_propose_rejects_mismatched_lengths() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(GovernorContract, ());
+        let client = GovernorContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let proposer = Address::generate(&env);
+        let votes_token_id = env.register(MockVotesContract, ());
+        let timelock = Address::generate(&env);
+
+        client.initialize(&admin, &votes_token_id, &timelock, &100, &1000, &50, &100);
+
+        let target = Address::generate(&env);
+        let fn_name = Symbol::new(&env, "exec");
+        let calldata1 = Bytes::new(&env);
+        let calldata2 = Bytes::new(&env);
+        let description = String::from_str(&env, "Mismatched proposal");
+
+        let mut targets = soroban_sdk::Vec::new(&env);
+        targets.push_back(target);
+
+        let mut fn_names = soroban_sdk::Vec::new(&env);
+        fn_names.push_back(fn_name);
+
+        let mut calldatas = soroban_sdk::Vec::new(&env);
+        calldatas.push_back(calldata1);
+        calldatas.push_back(calldata2); // Extra calldata
+
+        // Should panic with "targets, fn_names, and calldatas length mismatch"
+        client.propose(&proposer, &description, &targets, &fn_names, &calldatas);
+    }
+
+    #[test]
+    #[should_panic(expected = "must have at least one target")]
+    fn test_propose_rejects_empty_targets() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(GovernorContract, ());
+        let client = GovernorContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let proposer = Address::generate(&env);
+        let votes_token_id = env.register(MockVotesContract, ());
+        let timelock = Address::generate(&env);
+
+        client.initialize(&admin, &votes_token_id, &timelock, &100, &1000, &50, &100);
+
+        let description = String::from_str(&env, "Empty proposal");
+        let targets = soroban_sdk::Vec::new(&env);
+        let fn_names = soroban_sdk::Vec::new(&env);
+        let calldatas = soroban_sdk::Vec::new(&env);
+
+        // Should panic with "must have at least one target"
+        client.propose(&proposer, &description, &targets, &fn_names, &calldatas);
     }
 }
 
