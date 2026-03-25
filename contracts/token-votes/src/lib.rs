@@ -96,6 +96,22 @@ impl TokenVotesContract {
         checkpoints.last().unwrap().votes
     }
 
+    /// Get the underlying token address.
+    pub fn token(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::Token)
+            .expect("not initialized")
+    }
+
+    /// Get the admin address.
+    pub fn admin(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("not initialized")
+    }
+
     /// Get voting power at a past ledger sequence (snapshot).
     pub fn get_past_votes(env: Env, account: Address, ledger: u32) -> i128 {
         let checkpoints: soroban_sdk::Vec<Checkpoint> = env

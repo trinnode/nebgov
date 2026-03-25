@@ -180,6 +180,22 @@ impl TimelockContract {
             .unwrap_or(86400)
     }
 
+    /// Get the governor address.
+    pub fn governor(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::Governor)
+            .expect("not initialized")
+    }
+
+    /// Get the admin address.
+    pub fn admin(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("not initialized")
+    }
+
     /// Update minimum delay. Only admin.
     /// TODO issue #11: enforce timelock on delay changes themselves.
     pub fn update_delay(env: Env, caller: Address, new_delay: u64) {
