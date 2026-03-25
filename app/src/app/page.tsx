@@ -67,13 +67,14 @@ export default function ProposalsPage() {
         const governorAddress = process.env.NEXT_PUBLIC_GOVERNOR_ADDRESS;
         const timelockAddress = process.env.NEXT_PUBLIC_TIMELOCK_ADDRESS;
         const votesAddress = process.env.NEXT_PUBLIC_VOTES_ADDRESS;
-        const network = (process.env.NEXT_PUBLIC_NETWORK || "testnet") as Network;
+        const network = (process.env.NEXT_PUBLIC_NETWORK ||
+          "testnet") as Network;
         const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL;
 
         // Validate required environment variables
         if (!governorAddress || !timelockAddress || !votesAddress) {
           throw new Error(
-            "Missing required environment variables. Please check .env.local configuration."
+            "Missing required environment variables. Please check .env.local configuration.",
           );
         }
 
@@ -107,7 +108,7 @@ export default function ProposalsPage() {
             (async () => {
               try {
                 const proposalId = BigInt(i);
-                
+
                 // Fetch state and votes in parallel
                 const [state, votes] = await Promise.all([
                   client.getProposalState(proposalId),
@@ -126,19 +127,21 @@ export default function ProposalsPage() {
                 console.error(`Error fetching proposal ${i}:`, err);
                 return null;
               }
-            })()
+            })(),
           );
         }
 
         const results = await Promise.all(proposalPromises);
         const validProposals = results.filter(
-          (p): p is ProposalSummary => p !== null
+          (p): p is ProposalSummary => p !== null,
         );
 
         setProposals(validProposals);
       } catch (err) {
         console.error("Error fetching proposals:", err);
-        setError(err instanceof Error ? err.message : "Failed to load proposals");
+        setError(
+          err instanceof Error ? err.message : "Failed to load proposals",
+        );
       } finally {
         setLoading(false);
       }
@@ -170,7 +173,9 @@ export default function ProposalsPage() {
       {/* Error state */}
       {error && (
         <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-6">
-          <p className="text-red-800 text-sm font-medium">Error loading proposals</p>
+          <p className="text-red-800 text-sm font-medium">
+            Error loading proposals
+          </p>
           <p className="text-red-600 text-sm mt-1">{error}</p>
         </div>
       )}
@@ -200,7 +205,9 @@ export default function ProposalsPage() {
               d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
             />
           </svg>
-          <h3 className="mt-2 text-sm font-medium text-gray-900">No proposals</h3>
+          <h3 className="mt-2 text-sm font-medium text-gray-900">
+            No proposals
+          </h3>
           <p className="mt-1 text-sm text-gray-500">
             Get started by creating a new proposal.
           </p>
@@ -238,7 +245,8 @@ export default function ProposalsPage() {
                         For: {(Number(p.votesFor) / 1e7).toLocaleString()}
                       </span>
                       <span>
-                        Against: {(Number(p.votesAgainst) / 1e7).toLocaleString()}
+                        Against:{" "}
+                        {(Number(p.votesAgainst) / 1e7).toLocaleString()}
                       </span>
                     </div>
                   </div>
@@ -268,7 +276,9 @@ export default function ProposalsPage() {
                   Previous
                 </button>
                 <button
-                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  onClick={() =>
+                    setCurrentPage((p) => Math.min(totalPages, p + 1))
+                  }
                   disabled={currentPage === totalPages}
                   className="px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
