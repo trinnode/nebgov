@@ -6,8 +6,10 @@
  * TODO issue #46: wire up vote casting UI to GovernorClient.castVote().
  */
 
-import { useState } from "react";
-import { VoteSupport, ProposalState } from "@nebgov/sdk";
+import { useEffect, useMemo, useState } from "react";
+import { VoteSupport, ProposalState, VotesClient, type Network } from "@nebgov/sdk";
+import { useWallet } from "../../../lib/wallet-context";
+import { DelegateModal } from "../../../components/DelegateModal";
 
 interface Props {
   params: { id: string };
@@ -28,8 +30,56 @@ export default function ProposalDetailPage({ params }: Props) {
   const [voted, setVoted] = useState(false);
   const [voting, setVoting] = useState(false);
   const [selectedSupport, setSelectedSupport] = useState<VoteSupport | null>(null);
+  const [delegateOpen, setDelegateOpen] = useState(false);
+  const [delegatee, setDelegatee] = useState<string | null>(null);
+  const [votingPower, setVotingPower] = useState<bigint>(0n);
+  const [delegationLoading, setDelegationLoading] = useState(false);
 
   const proposal = MOCK_PROPOSAL; // TODO: fetch by params.id
+  const { publicKey, isConnected } = useWallet();
+
+  const votesClient = useMemo(() => {
+    const governorAddress = process.env.NEXT_PUBLIC_GOVERNOR_ADDRESS;
+    const timelockAddress = process.env.NEXT_PUBLIC_TIMELOCK_ADDRESS;
+    const votesAddress = process.env.NEXT_PUBLIC_VOTES_ADDRESS;
+    const network = (process.env.NEXT_PUBLIC_NETWORK || "testnet") as Network;
+    const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL;
+
+    if (!governorAddress || !timelockAddress || !votesAddress) return null;
+
+    return new VotesClient({
+      governorAddress,
+      timelockAddress,
+      votesAddress,
+      network,
+      ...(rpcUrl && { rpcUrl }),
+    });
+  }, []);
+
+  async function refreshDelegation() {
+    if (!votesClient || !publicKey) return;
+    setDelegationLoading(true);
+    try {
+      const [d, power] = await Promise.all([
+        votesClient.getDelegatee(publicKey),
+        votesClient.getVotes(publicKey),
+      ]);
+      setDelegatee(d);
+      setVotingPower(power);
+    } finally {
+      setDelegationLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!isConnected || !publicKey) {
+      setDelegatee(null);
+      setVotingPower(0n);
+      return;
+    }
+    refreshDelegation();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isConnected, publicKey, votesClient]);
 
   const total =
     Number(proposal.votesFor) +
@@ -63,6 +113,48 @@ export default function ProposalDetailPage({ params }: Props) {
       <p className="text-sm text-gray-500 mb-6">
         Proposed by <span className="font-mono">{proposal.proposer}</span>
       </p>
+
+      {/* Delegation */}
+      <div className="bg-white border border-gray-200 rounded-xl p-6 mb-6">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide">
+              Delegation
+            </h2>
+            <p className="text-xs text-gray-500 mt-1">
+              Delegate voting power to yourself or another address.
+            </p>
+          </div>
+          <button
+            onClick={() => setDelegateOpen(true)}
+            disabled={!isConnected}
+            className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Delegate
+          </button>
+        </div>
+
+        <div className="mt-4 text-sm text-gray-700">
+          {delegationLoading ? (
+            <p className="text-gray-500">Loading delegation…</p>
+          ) : delegatee ? (
+            <div className="space-y-1">
+              <p>
+                Current delegatee:{" "}
+                <span className="font-mono text-gray-900">{delegatee}</span>
+              </p>
+              <p>
+                Voting power:{" "}
+                <span className="font-mono text-gray-900">{votingPower.toString()}</span>
+              </p>
+            </div>
+          ) : (
+            <p className="text-gray-500">
+              No delegatee set{isConnected ? "." : " (connect wallet to view)."}
+            </p>
+          )}
+        </div>
+      </div>
 
       {/* Vote bars — TODO issue #43: replace with recharts pie/bar chart */}
       <div className="bg-white border border-gray-200 rounded-xl p-6 mb-6 space-y-4">
@@ -129,6 +221,12 @@ export default function ProposalDetailPage({ params }: Props) {
           Your vote has been submitted.
         </div>
       )}
+
+      <DelegateModal
+        open={delegateOpen}
+        onClose={() => setDelegateOpen(false)}
+        onDelegated={() => refreshDelegation()}
+      />
     </div>
   );
 }
