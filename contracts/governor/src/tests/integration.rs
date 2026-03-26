@@ -172,14 +172,13 @@ fn test_full_proposal_lifecycle() {
         "expected Active during voting window"
     );
 
-    // Both Alice and Bob vote For. The governor currently counts each vote
-    // as weight=1 (TODO issue #3 will wire in token-votes); two For votes
-    // satisfy the simple majority check.
+    // Both Alice and Bob vote For. cast_vote() now reads snapshot voting
+    // power from token-votes; Alice has 500 and Bob has 500, totalling 1000.
     governor_client.cast_vote(&alice, &proposal_id, &VoteSupport::For);
     governor_client.cast_vote(&bob, &proposal_id, &VoteSupport::For);
 
     let (votes_for, votes_against, votes_abstain) = governor_client.proposal_votes(&proposal_id);
-    assert_eq!(votes_for, 2, "both voters should have cast For votes");
+    assert_eq!(votes_for, 1000, "votes should reflect token-weighted power (500 + 500)");
     assert_eq!(votes_against, 0);
     assert_eq!(votes_abstain, 0);
 

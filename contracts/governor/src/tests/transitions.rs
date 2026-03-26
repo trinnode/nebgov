@@ -16,6 +16,11 @@ impl MockVotesContract {
         1_000_000
     }
 
+    pub fn get_past_votes(_env: Env, _account: Address, _ledger: u32) -> i128 {
+        // Return a fixed snapshot voting power for cast_vote() tests
+        1_000_000
+    }
+
     pub fn get_past_total_supply(_env: Env, _ledger: u32) -> i128 {
         // Return a fixed total supply for quorum calculations in tests
         10_000_000
@@ -108,6 +113,24 @@ fn test_defeated_when_against_wins() {
     client.cast_vote(&voter, &proposal_id, &VoteSupport::Against);
 
     env.ledger().set_sequence_number(111); // Past end
+    assert_eq!(client.state(&proposal_id), ProposalState::Defeated);
+}
+
+#[test]
+/// Verifies that a proposal is Defeated if voting ends in a tie
+/// (votes_against == votes_for).
+fn test_defeated_when_votes_for_equals_votes_against() {
+    let (env, client, _, proposer, voter_for) = setup();
+    let voter_against = Address::generate(&env);
+    let proposal_id = make_proposal(&env, &client, &proposer);
+
+    // Active state.
+    env.ledger().set_sequence_number(10);
+    client.cast_vote(&voter_for, &proposal_id, &VoteSupport::For);
+    client.cast_vote(&voter_against, &proposal_id, &VoteSupport::Against);
+
+    // Past end_ledger.
+    env.ledger().set_sequence_number(111);
     assert_eq!(client.state(&proposal_id), ProposalState::Defeated);
 }
 
@@ -244,8 +267,8 @@ fn test_execute_fails_before_timelock_delay() {
     // Set 1 hour delay
     timelock_client.initialize(&admin, &client.address, &3600);
 
-    let votes_token = Address::generate(&env);
-    client.initialize(&admin, &votes_token, &timelock_id, &10, &100, &0, &0);
+    let votes_token_id = env.register(MockVotesContract, ());
+    client.initialize(&admin, &votes_token_id, &timelock_id, &10, &100, &0, &0);
 
     client.queue(&proposal_id);
 

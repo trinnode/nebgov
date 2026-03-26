@@ -28,6 +28,8 @@ import {
 interface WalletContextValue {
   /** Truncated public key when connected, e.g. "GABC...XY12" */
   address: string | null;
+  /** Full public key when connected, e.g. "G...". */
+  publicKey: string | null;
   isConnected: boolean;
   isConnecting: boolean;
   error: string | null;
@@ -53,6 +55,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   const kitRef = useRef<StellarWalletsKit | null>(null);
 
   const [address, setAddress] = useState<string | null>(null);
+  const [publicKey, setPublicKey] = useState<string | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -79,6 +82,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
             kit.setWallet(option.id);
             const { address: rawAddress } = await kit.getAddress();
             setAddress(truncateAddress(rawAddress));
+            setPublicKey(rawAddress);
           } catch (err) {
             const msg =
               err instanceof Error ? err.message : "Failed to get address";
@@ -98,6 +102,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
   const disconnect = useCallback(() => {
     setAddress(null);
+    setPublicKey(null);
     setError(null);
   }, []);
 
@@ -105,6 +110,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     <WalletContext.Provider
       value={{
         address,
+        publicKey,
         isConnected: !!address,
         isConnecting,
         error,
