@@ -24,6 +24,7 @@ const MOCK_PROPOSAL = {
   votesAbstain: 5000n,
   endLedger: 123456,
   proposer: "GABC...1234",
+  quorum: 100000n as bigint | undefined,
 };
 
 export default function ProposalDetailPage({ params }: Props) {
@@ -88,6 +89,24 @@ export default function ProposalDetailPage({ params }: Props) {
 
   const pct = (n: bigint) =>
     total === 0 ? 0 : Math.round((Number(n) / total) * 100);
+
+  const toMillions = (n: bigint) => Number(n) / 1e6;
+
+  const chartData = [
+    { name: "For", votes: toMillions(proposal.votesFor), pct: pct(proposal.votesFor) },
+    { name: "Against", votes: toMillions(proposal.votesAgainst), pct: pct(proposal.votesAgainst) },
+    { name: "Abstain", votes: toMillions(proposal.votesAbstain), pct: pct(proposal.votesAbstain) },
+  ];
+
+  const COLORS: Record<string, string> = {
+    For: "#22c55e",
+    Against: "#ef4444",
+    Abstain: "#9ca3af",
+  };
+
+  const quorumThreshold = proposal.quorum
+    ? Number(proposal.quorum) / 1e6
+    : undefined;
 
   async function handleVote() {
     if (selectedSupport === null) return;
@@ -162,26 +181,79 @@ export default function ProposalDetailPage({ params }: Props) {
           Current Votes
         </h2>
 
-        {[
-          { label: "For", votes: proposal.votesFor, color: "bg-green-500" },
-          { label: "Against", votes: proposal.votesAgainst, color: "bg-red-500" },
-          { label: "Abstain", votes: proposal.votesAbstain, color: "bg-gray-400" },
-        ].map(({ label, votes, color }) => (
-          <div key={label}>
-            <div className="flex justify-between text-sm mb-1">
-              <span className="text-gray-700">{label}</span>
-              <span className="text-gray-500">
-                {(Number(votes) / 1e7).toLocaleString()} ({pct(votes)}%)
+        <ResponsiveContainer width="100%" height={180}>
+          <BarChart
+            data={chartData}
+            layout="vertical"
+            margin={{ top: 0, right: 30, left: 10, bottom: 0 }}
+          >
+            <XAxis
+              type="number"
+              tick={{ fontSize: 12, fill: "#6b7280" }}
+              tickFormatter={(v: number) => `${v.toLocaleString()}M`}
+              axisLine={false}
+              tickLine={false}
+            />
+            <YAxis
+              type="category"
+              dataKey="name"
+              tick={{ fontSize: 13, fontWeight: 500, fill: "#374151" }}
+              width={70}
+              axisLine={false}
+              tickLine={false}
+            />
+            <Tooltip
+              formatter={(value: number, _name: string, entry: { payload: { pct: number } }) => [
+                `${value.toLocaleString()}M tokens (${entry.payload.pct}%)`,
+                "Votes",
+              ]}
+              cursor={{ fill: "rgba(0,0,0,0.04)" }}
+              contentStyle={{ borderRadius: 8, fontSize: 13 }}
+            />
+            <Bar
+              dataKey="votes"
+              radius={[0, 6, 6, 0]}
+              isAnimationActive={true}
+              animationDuration={800}
+              barSize={28}
+            >
+              {chartData.map((entry) => (
+                <Cell key={entry.name} fill={COLORS[entry.name]} />
+              ))}
+            </Bar>
+            {quorumThreshold !== undefined && (
+              <ReferenceLine
+                x={quorumThreshold}
+                stroke="#6366f1"
+                strokeDasharray="6 3"
+                strokeWidth={2}
+                label={{
+                  value: `Quorum ${quorumThreshold.toLocaleString()}M`,
+                  position: "top",
+                  fill: "#6366f1",
+                  fontSize: 11,
+                  fontWeight: 600,
+                }}
+              />
+            )}
+          </BarChart>
+        </ResponsiveContainer>
+
+        {/* Legend with counts */}
+        <div className="flex justify-center gap-6 mt-4 text-sm">
+          {chartData.map((entry) => (
+            <div key={entry.name} className="flex items-center gap-1.5">
+              <span
+                className="inline-block w-3 h-3 rounded-sm"
+                style={{ backgroundColor: COLORS[entry.name] }}
+              />
+              <span className="text-gray-700 font-medium">{entry.name}</span>
+              <span className="text-gray-400">
+                {entry.votes.toLocaleString()}M ({entry.pct}%)
               </span>
             </div>
-            <div className="w-full bg-gray-100 rounded-full h-2">
-              <div
-                className={`${color} h-2 rounded-full`}
-                style={{ width: `${pct(votes)}%` }}
-              />
-            </div>
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
 
       {/* Voting UI */}
