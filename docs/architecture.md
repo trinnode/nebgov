@@ -146,3 +146,7 @@ let token_price = reflector_client.lastprice(env, Asset::Stellar(token_address))
 let quorum_usd = 10_000_00; // $10,000 in 5-decimal USDC
 let quorum_tokens = quorum_usd * PRICE_DECIMALS / token_price.price;
 ```
+
+## Architecture Decision Records
+
+For detailed rationale behind key design decisions, see the [ADR directory](./adr/README.md).
