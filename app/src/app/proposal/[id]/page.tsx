@@ -8,8 +8,19 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { VoteSupport, ProposalState, VotesClient, type Network } from "@nebgov/sdk";
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  Cell,
+  ReferenceLine,
+} from "recharts";
 import { useWallet } from "../../../lib/wallet-context";
 import { DelegateModal } from "../../../components/DelegateModal";
+import { VotingModal } from "../../../components/VotingModal";
 
 interface Props {
   params: { id: string };
@@ -109,17 +120,12 @@ export default function ProposalDetailPage({ params }: Props) {
     : undefined;
 
   async function handleVote() {
+    // Open vote confirmation modal instead of immediate submit
     if (selectedSupport === null) return;
-    setVoting(true);
-    try {
-      // TODO issue #46: call GovernorClient.castVote(signer, proposalId, support)
-      console.log("Casting vote:", VoteSupport[selectedSupport]);
-      await new Promise((r) => setTimeout(r, 1500));
-      setVoted(true);
-    } finally {
-      setVoting(false);
-    }
+    setVoteModalOpen(true);
   }
+
+  const [voteModalOpen, setVoteModalOpen] = useState(false);
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-8">
@@ -262,7 +268,7 @@ export default function ProposalDetailPage({ params }: Props) {
           <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-4">
             Cast Your Vote
           </h2>
-          <div className="flex gap-3 mb-4">
+          <div className="flex flex-col sm:flex-row gap-3 mb-4">
             {[
               { label: "For", value: VoteSupport.For, color: "border-green-500 text-green-700" },
               { label: "Against", value: VoteSupport.Against, color: "border-red-500 text-red-700" },
@@ -298,6 +304,19 @@ export default function ProposalDetailPage({ params }: Props) {
         open={delegateOpen}
         onClose={() => setDelegateOpen(false)}
         onDelegated={() => refreshDelegation()}
+      />
+      <VotingModal
+        open={voteModalOpen}
+        onClose={() => setVoteModalOpen(false)}
+        proposalId={BigInt(params.id)}
+        preselectedSupport={selectedSupport}
+        delegatee={delegatee}
+        votingPower={votingPower}
+        onOpenDelegate={() => setDelegateOpen(true)}
+        onVoted={() => {
+          setVoted(true);
+          refreshDelegation();
+        }}
       />
     </div>
   );
