@@ -15,7 +15,10 @@ import {
   Users,
   BarChart3,
   Wallet2,
+  Sun,
+  Moon,
 } from "lucide-react";
+import { useTheme } from "../hooks/useTheme";
 import toast from "react-hot-toast";
 
 const NAV_LINKS = [
@@ -34,6 +37,9 @@ export function NavBar() {
   const [isWalletMenuOpen, setIsWalletMenuOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
   const drawerRef = useRef<HTMLDivElement>(null);
+  const { theme, setTheme } = useTheme();
+
+  const toggleTheme = () => setTheme(theme === "dark" ? "light" : "dark");
 
   useEffect(() => {
     setIsMenuOpen(false);
@@ -130,6 +136,17 @@ export function NavBar() {
         </div>
 
         <div className="flex items-center gap-4">
+          <button
+            onClick={toggleTheme}
+            aria-label="Toggle theme"
+            className="p-2 rounded-xl text-gray-600 hover:bg-gray-100 transition-colors"
+          >
+            {theme === "dark" ? (
+              <Sun className="w-5 h-5" aria-hidden />
+            ) : (
+              <Moon className="w-5 h-5" aria-hidden />
+            )}
+          </button>
           <div className="hidden md:block relative">
             {isConnected ? (
               <div className="relative" ref={drawerRef}>

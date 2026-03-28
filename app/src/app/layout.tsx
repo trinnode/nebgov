@@ -20,7 +20,14 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className={`${inter.className} bg-gray-50 min-h-screen`}>
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `;(function(){try{var theme=localStorage.getItem('theme');if(theme==='dark'){document.documentElement.classList.add('dark');return;}if(!theme&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches){document.documentElement.classList.add('dark');}}catch(e){}})();`,
+          }}
+        />
+      </head>
+      <body className={`${inter.className} bg-gray-50 dark:bg-gray-900 min-h-screen`}>
         <WalletProvider>
           <Toaster position="bottom-right" />
           <NavBar />
