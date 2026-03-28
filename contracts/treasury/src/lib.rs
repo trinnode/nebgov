@@ -149,6 +149,21 @@ impl TreasuryContract {
             .unwrap_or(1)
     }
 
+    pub fn tx_count(env: Env) -> u64 {
+        env.storage().instance().get(&DataKey::TxCount).unwrap_or(0)
+    }
+
+    pub fn has_approved(env: Env, tx_id: u64, approver: Address) -> bool {
+        env.storage()
+            .persistent()
+            .get(&DataKey::HasApproved(tx_id, approver))
+            .unwrap_or(false)
+    }
+
+    pub fn is_treasury_owner(env: Env, addr: Address) -> bool {
+        Self::is_owner(&env, &addr)
+    }
+
     // --- Internal helpers ---
 
     fn require_owner(env: &Env, addr: &Address) {

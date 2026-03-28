@@ -32,25 +32,28 @@ const NETWORK_PASSPHRASES: Record<Network, string> = {
   futurenet: Networks.FUTURENET,
 };
 
+function scVecAddress(addrs: string[]): xdr.ScVal {
+  return xdr.ScVal.scvVec(
+    addrs.map((a) => nativeToScVal(a, { type: "address" }))
+  );
+}
+
+function scVecSymbol(syms: string[]): xdr.ScVal {
+  return xdr.ScVal.scvVec(
+    syms.map((s) => nativeToScVal(s.trim(), { type: "symbol" }))
+  );
+}
+
+function scVecBytes(blobs: (Buffer | Uint8Array)[]): xdr.ScVal {
+  return xdr.ScVal.scvVec(
+    blobs.map((b) => nativeToScVal(b, { type: "bytes" }))
+  );
+}
+
 /**
  * GovernorClient — interact with a deployed NebGov governor contract.
  *
  * TODO issue #14: add full error handling, retry logic, and simulation flow.
- *
- * @example
- * const client = new GovernorClient({
- *   governorAddress: "CABC...",
- *   timelockAddress: "CDEF...",
- *   votesAddress: "CGHI...",
- *   network: "testnet",
- * });
- * const id = await client.propose(
- *   keypair,
- *   "Upgrade protocol fee to 0.3%",
- *   "CAAAAA...",
- *   "upgrade",
- *   Buffer.from([0, 0, 1])
- * );
  */
 export class GovernorClient {
   private readonly config: GovernorConfig;
@@ -67,22 +70,27 @@ export class GovernorClient {
   }
 
   /**
-   * Create a new governance proposal.
+   * Create a new governance proposal (multi-action, matching on-chain `propose`).
    *
-   * @param signer The account proposing the change
-   * @param description A brief summary of the proposal
-   * @param target The address of the contract to be called if the proposal passes
-   * @param fnName The name of the function to call on the target
-   * @param calldata The encoded arguments for the function call
-   * @returns The unique identifier of the created proposal
+   * @param targets Calldata targets (same length as `fnNames` / `calldatas`)
    */
   async propose(
     signer: Keypair,
     description: string,
-    target: string,
-    fnName: string,
-    calldata: Buffer | Uint8Array
+    targets: string[],
+    fnNames: string[],
+    calldatas: (Buffer | Uint8Array)[]
   ): Promise<bigint> {
+    if (
+      targets.length !== fnNames.length ||
+      targets.length !== calldatas.length
+    ) {
+      throw new Error("targets, fnNames, and calldatas must have the same length");
+    }
+    if (targets.length === 0) {
+      throw new Error("At least one on-chain action is required");
+    }
+
     const account = await this.server.getAccount(signer.publicKey());
 
     const tx = new TransactionBuilder(account, {
@@ -94,9 +102,9 @@ export class GovernorClient {
           "propose",
           nativeToScVal(signer.publicKey(), { type: "address" }),
           nativeToScVal(description, { type: "string" }),
-          nativeToScVal(target, { type: "address" }),
-          nativeToScVal(fnName, { type: "symbol" }),
-          nativeToScVal(calldata, { type: "bytes" })
+          scVecAddress(targets),
+          scVecSymbol(fnNames),
+          scVecBytes(calldatas)
         )
       )
       .setTimeout(30)
@@ -110,10 +118,171 @@ export class GovernorClient {
       throw new Error(`Transaction failed: ${JSON.stringify(result)}`);
     }
 
-    // Poll for confirmation
     const confirmed = await this.pollForConfirmation(result.hash);
     const returnVal = confirmed.returnValue;
     return returnVal ? BigInt(scValToNative(returnVal)) : 0n;
+  }
+
+  /**
+   * Same as {@link propose} but signs with a wallet callback (unsigned XDR in → signed XDR out).
+   */
+  async proposeWithSign(
+    signerPublicKey: string,
+    description: string,
+    targets: string[],
+    fnNames: string[],
+    calldatas: (Buffer | Uint8Array)[],
+    signUnsignedXdr: (xdr: string) => Promise<string>
+  ): Promise<bigint> {
+    if (
+      targets.length !== fnNames.length ||
+      targets.length !== calldatas.length
+    ) {
+      throw new Error("targets, fnNames, and calldatas must have the same length");
+    }
+    if (targets.length === 0) {
+      throw new Error("At least one on-chain action is required");
+    }
+
+    const account = await this.server.getAccount(signerPublicKey);
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(
+        this.contract.call(
+          "propose",
+          nativeToScVal(signerPublicKey, { type: "address" }),
+          nativeToScVal(description, { type: "string" }),
+          scVecAddress(targets),
+          scVecSymbol(fnNames),
+          scVecBytes(calldatas)
+        )
+      )
+      .setTimeout(30)
+      .build();
+
+    const prepared = await this.server.prepareTransaction(tx);
+    const signedXdr = await signUnsignedXdr(prepared.toXDR());
+    const signed = TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
+    const result = await this.server.sendTransaction(signed);
+    if (result.status === "ERROR") {
+      throw new Error(`Transaction failed: ${JSON.stringify(result)}`);
+    }
+    const confirmed = await this.pollForConfirmation(result.hash);
+    const returnVal = confirmed.returnValue;
+    return returnVal ? BigInt(scValToNative(returnVal)) : 0n;
+  }
+
+  /** Minimum voting power required to create a proposal (`proposal_threshold`). */
+  async proposalThreshold(): Promise<bigint> {
+    const result = await this.server.simulateTransaction(
+      new TransactionBuilder(
+        await this.server.getAccount(this.config.governorAddress),
+        { fee: BASE_FEE, networkPassphrase: this.networkPassphrase }
+      )
+        .addOperation(this.contract.call("proposal_threshold"))
+        .setTimeout(30)
+        .build()
+    );
+
+    if (SorobanRpc.Api.isSimulationError(result)) return 0n;
+    const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+      .result?.retval;
+    return raw ? BigInt(scValToNative(raw) as number | bigint | string) : 0n;
+  }
+
+  /**
+   * Simulate a single contract invocation (for validating calldata before proposing).
+   */
+  async simulateTargetInvocation(
+    footprintSourceAccount: string,
+    contractId: string,
+    functionName: string,
+    args: xdr.ScVal[]
+  ): Promise<{
+    ok: boolean;
+    error?: string;
+    cpuInsns?: string;
+    memBytes?: string;
+  }> {
+    const target = new Contract(contractId);
+    const op = target.call(functionName, ...args);
+    const result = await this.server.simulateTransaction(
+      new TransactionBuilder(
+        await this.server.getAccount(footprintSourceAccount),
+        { fee: BASE_FEE, networkPassphrase: this.networkPassphrase }
+      )
+        .addOperation(op)
+        .setTimeout(30)
+        .build()
+    );
+
+    if (SorobanRpc.Api.isSimulationError(result)) {
+      const err = result as unknown as { error?: string };
+      return { ok: false, error: err.error ?? "Simulation failed" };
+    }
+    const ok = result as SorobanRpc.Api.SimulateTransactionSuccessResponse & {
+      cost?: { cpuInsns?: string; memBytes?: string };
+    };
+    return {
+      ok: true,
+      cpuInsns: ok.cost?.cpuInsns,
+      memBytes: ok.cost?.memBytes,
+    };
+  }
+
+  /** Resource hints for the full `propose` transaction (simulation only). */
+  async estimateProposeResources(
+    proposer: string,
+    description: string,
+    targets: string[],
+    fnNames: string[],
+    calldatas: (Buffer | Uint8Array)[]
+  ): Promise<{
+    ok: boolean;
+    error?: string;
+    cpuInsns?: string;
+    memBytes?: string;
+  }> {
+    try {
+      const account = await this.server.getAccount(proposer);
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "propose",
+            nativeToScVal(proposer, { type: "address" }),
+            nativeToScVal(description, { type: "string" }),
+            scVecAddress(targets),
+            scVecSymbol(fnNames),
+            scVecBytes(calldatas)
+          )
+        )
+        .setTimeout(30)
+        .build();
+
+      const result = await this.server.simulateTransaction(tx);
+      if (SorobanRpc.Api.isSimulationError(result)) {
+        const err = result as unknown as { error?: string };
+        return { ok: false, error: err.error ?? "Simulation failed" };
+      }
+      const ok = result as SorobanRpc.Api.SimulateTransactionSuccessResponse & {
+        cost?: { cpuInsns?: string; memBytes?: string };
+      };
+      return {
+        ok: true,
+        cpuInsns: ok.cost?.cpuInsns,
+        memBytes: ok.cost?.memBytes,
+      };
+    } catch (e: unknown) {
+      return {
+        ok: false,
+        error: e instanceof Error ? e.message : "estimate failed",
+      };
+    }
   }
 
   /**
@@ -244,6 +413,47 @@ export class GovernorClient {
       bigint
     ];
     return { votesFor, votesAgainst, votesAbstain };
+  }
+
+  /** Current Soroban ledger sequence from the RPC backing this client. */
+  async getLatestLedger(): Promise<number> {
+    const info = await this.server.getLatestLedger();
+    return info.sequence;
+  }
+
+  /**
+   * Poll `getProposalState` until the state changes (compared to the prior poll).
+   *
+   * The first successful poll establishes a baseline and does **not** invoke `onChange`.
+   * Unsubscribe with the returned function to stop polling.
+   */
+  onProposalStateChange(
+    proposalId: bigint,
+    onChange: (newState: ProposalState) => void,
+    pollIntervalMs: number = 10_000
+  ): () => void {
+    let stopped = false;
+    let previous: ProposalState | undefined;
+
+    const tick = async () => {
+      if (stopped) return;
+      try {
+        const state = await this.getProposalState(proposalId);
+        if (previous !== undefined && state !== previous) {
+          onChange(state);
+        }
+        previous = state;
+      } catch {
+        // Transient RPC errors — retry on next tick
+      }
+    };
+
+    void tick();
+    const handle = setInterval(() => void tick(), pollIntervalMs);
+    return () => {
+      stopped = true;
+      clearInterval(handle);
+    };
   }
 
   /**

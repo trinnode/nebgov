@@ -19,6 +19,17 @@ export {
   subscribeToProposals,
   subscribeToVotes,
   getProposalEvents,
+  subscribeToProposalQueued,
+  subscribeToProposalExecuted,
 } from "./events";
-export type { SorobanEvent, SubscriptionOptions } from "./events";
+export type {
+  SorobanEvent,
+  SubscriptionOptions,
+  ProposalCreatedEventData,
+} from "./events";
+export {
+  parseProposalCreatedEvent,
+  parseProposalQueuedEvent,
+  parseProposalExecutedEvent,
+} from "./events";
 export * from "./types";

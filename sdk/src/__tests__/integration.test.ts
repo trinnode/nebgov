@@ -60,9 +60,9 @@ describeIfTestnet("SDK integration tests (testnet)", () => {
       proposalId = await governor.propose(
         signer,
         "Integration test proposal",
-        config.timelockAddress, // arbitrary target
-        "noop",
-        Buffer.from("integration-test")
+        [config.timelockAddress],
+        ["noop"],
+        [Buffer.from("integration-test")],
       );
 
       expect(proposalId).toBeGreaterThan(BigInt(0));
