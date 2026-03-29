@@ -2,6 +2,9 @@
 
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, token, Address, Env};
 
+#[cfg(test)]
+mod load_tests;
+
 /// A voting power checkpoint at a specific ledger sequence.
 #[contracttype]
 #[derive(Clone)]
