@@ -12,6 +12,7 @@ export enum ProposalState {
   Queued = "Queued",
   Executed = "Executed",
   Cancelled = "Cancelled",
+  Expired = "Expired",
 }
 
 export class UnknownProposalStateError extends Error {
@@ -25,6 +26,12 @@ export enum VoteSupport {
   Against = 0,
   For = 1,
   Abstain = 2,
+}
+
+export enum VoteType {
+  Simple = "Simple",
+  Extended = "Extended", 
+  Quadratic = "Quadratic",
 }
 
 export interface Proposal {
@@ -70,6 +77,7 @@ export interface TimelockOperation {
   id: string; // hex-encoded operation hash
   target: string;
   readyAt: bigint;
+  expiresAt: bigint;
   executed: boolean;
   cancelled: boolean;
 }
@@ -88,6 +96,9 @@ export interface GovernorSettings {
   votingPeriod: number;
   quorumNumerator: number;
   proposalThreshold: bigint;
+  guardian: string;
+  voteType: VoteType;
+  proposalGracePeriod: number;
 }
 
 export interface DelegateInfo {
