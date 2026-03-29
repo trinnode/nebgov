@@ -8,16 +8,16 @@ use sorogov_token_votes::TokenVotesContract;
 // Import the WASM binaries for the contracts we want to deploy.
 // These are built via `stellar contract build`
 mod wasm {
-    soroban_sdk::contractimport!(file = "../../target/wasm32v1-none/release/sorogov_governor.wasm");
+    soroban_sdk::contractimport!(file = "../../target/wasm32-unknown-unknown/release/sorogov_governor.wasm");
 }
 
 mod timelock_wasm {
-    soroban_sdk::contractimport!(file = "../../target/wasm32v1-none/release/sorogov_timelock.wasm");
+    soroban_sdk::contractimport!(file = "../../target/wasm32-unknown-unknown/release/sorogov_timelock.wasm");
 }
 
 mod token_votes_wasm {
     soroban_sdk::contractimport!(
-        file = "../../target/wasm32v1-none/release/sorogov_token_votes.wasm"
+        file = "../../target/wasm32-unknown-unknown/release/sorogov_token_votes.wasm"
     );
 }
 
