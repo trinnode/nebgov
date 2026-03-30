@@ -22,6 +22,9 @@
                 },
                 {
                   "u64": 0
+                },
+                {
+                  "u64": 1209600
                 }
               ]
             }
@@ -226,6 +229,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "expires_at"
+                      },
+                      "val": {
+                        "u64": 1209600
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "fn_name"
                       },
                       "val": {
@@ -328,6 +339,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "expires_at"
+                      },
+                      "val": {
+                        "u64": 1209600
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "fn_name"
                       },
                       "val": {
@@ -400,6 +419,18 @@
                         },
                         "val": {
                           "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "ExecutionWindow"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u64": 1209600
                         }
                       },
                       {

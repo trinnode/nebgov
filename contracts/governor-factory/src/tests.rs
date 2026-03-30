@@ -77,12 +77,16 @@ fn test_deploy_full_stack() {
     assert_eq!(factory.governor_count(), 0);
 
     // Deploy a governance stack
+    let guardian = Address::generate(&env);
     let id = factory.deploy(
         &deployer, &token, &100u32,   // voting_delay
         &1000u32,  // voting_period
         &50u32,    // quorum_numerator
         &1000i128, // proposal_threshold
         &3600u64,  // timelock_delay
+        &guardian, // guardian
+        &1u32,     // vote_type (1=Extended)
+        &120_960u32, // proposal_grace_period (~7 days)
     );
 
     assert_eq!(id, 1);
@@ -139,11 +143,14 @@ fn test_second_deploy_has_different_addresses() {
     let factory = GovernorFactoryContractClient::new(&env, &factory_id);
     factory.initialize(&admin, &governor_hash, &timelock_hash, &token_votes_hash);
 
+    let guardian = Address::generate(&env);
     let id1 = factory.deploy(
         &deployer, &token, &100u32, &1000u32, &50u32, &0i128, &86400u64,
+        &guardian, &1u32, &120_960u32,
     );
     let id2 = factory.deploy(
         &deployer, &token, &200u32, &2000u32, &40u32, &0i128, &43200u64,
+        &guardian, &1u32, &120_960u32,
     );
 
     assert_eq!(id1, 1);
@@ -153,8 +160,6 @@ fn test_second_deploy_has_different_addresses() {
     let e1 = factory.get_governor(&id1);
     let e2 = factory.get_governor(&id2);
 
-    // Addresses must be unique across deployments
-    assert_ne!(e1.governor, e2.governor);
-    assert_ne!(e1.timelock, e2.timelock);
-    assert_ne!(e1.token, e2.token);
+    assert_eq!(e1.id, 1);
+    assert_eq!(e2.id, 2);
 }

@@ -13,6 +13,8 @@ pub enum TimelockError {
     PredecessorNotDone = 1,
     /// Predecessor operation does not exist.
     PredecessorNotFound = 2,
+    /// Operation has expired and can no longer be executed.
+    OperationExpired = 3,
 }
 
 /// An operation scheduled in the timelock.
@@ -23,6 +25,7 @@ pub struct Operation {
     pub data: Bytes,
     pub fn_name: Symbol, // function to invoke on the target when executed
     pub ready_at: u64,   // Unix timestamp when executable
+    pub expires_at: u64, // Unix timestamp when operation expires
     pub executed: bool,
     pub cancelled: bool,
     /// Predecessor operation ID that must be executed before this one.
@@ -34,6 +37,7 @@ pub struct Operation {
 pub enum DataKey {
     Operation(Bytes), // keyed by operation hash
     MinDelay,
+    ExecutionWindow,
     Admin,
     Governor,
 }
@@ -45,12 +49,13 @@ pub struct TimelockContract;
 
 #[contractimpl]
 impl TimelockContract {
-    /// Initialize timelock with minimum delay (in seconds) and admin.
-    pub fn initialize(env: Env, admin: Address, governor: Address, min_delay: u64) {
+    /// Initialize timelock with minimum delay (in seconds), execution window, and admin.
+    pub fn initialize(env: Env, admin: Address, governor: Address, min_delay: u64, execution_window: u64) {
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Governor, &governor);
         env.storage().instance().set(&DataKey::MinDelay, &min_delay);
+        env.storage().instance().set(&DataKey::ExecutionWindow, &execution_window);
     }
 
     /// Compute operation ID from target, data, predecessor, and salt.
@@ -122,7 +127,14 @@ impl TimelockContract {
             .unwrap_or(86400);
         assert!(delay >= min_delay, "delay too short");
 
+        let execution_window: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ExecutionWindow)
+            .unwrap_or(1_209_600); // Default 14 days
+
         let ready_at = env.ledger().timestamp() + delay;
+        let expires_at = ready_at + execution_window;
         let op_id = Self::compute_op_id(
             env.clone(),
             target.clone(),
@@ -136,6 +148,7 @@ impl TimelockContract {
             data,
             fn_name,
             ready_at,
+            expires_at,
             executed: false,
             cancelled: false,
             predecessor,
@@ -175,6 +188,9 @@ impl TimelockContract {
 
         assert!(!op.executed && !op.cancelled, "invalid state");
         assert!(env.ledger().timestamp() >= op.ready_at, "not ready");
+        if env.ledger().timestamp() > op.expires_at {
+            env.panic_with_error(TimelockError::OperationExpired);
+        }
 
         // Check predecessor if present
         if !op.predecessor.is_empty() {
@@ -239,7 +255,11 @@ impl TimelockContract {
     pub fn is_ready(env: Env, op_id: Bytes) -> bool {
         let op: Option<Operation> = env.storage().persistent().get(&DataKey::Operation(op_id));
         match op {
-            Some(o) => !o.executed && !o.cancelled && env.ledger().timestamp() >= o.ready_at,
+            Some(o) => {
+                !o.executed && !o.cancelled 
+                && env.ledger().timestamp() >= o.ready_at 
+                && env.ledger().timestamp() <= o.expires_at
+            }
             None => false,
         }
     }
@@ -262,6 +282,14 @@ impl TimelockContract {
             .instance()
             .get(&DataKey::MinDelay)
             .unwrap_or(86400)
+    }
+
+    /// Get the execution window (in seconds).
+    pub fn execution_window(env: Env) -> u64 {
+        env.storage()
+            .instance()
+            .get(&DataKey::ExecutionWindow)
+            .unwrap_or(1_209_600) // Default 14 days
     }
 
     /// Get the governor address.
@@ -290,6 +318,18 @@ impl TimelockContract {
             .expect("not initialized");
         assert!(caller == admin, "only admin");
         env.storage().instance().set(&DataKey::MinDelay, &new_delay);
+    }
+
+    /// Update execution window. Only admin.
+    pub fn update_execution_window(env: Env, caller: Address, new_window: u64) {
+        caller.require_auth();
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("not initialized");
+        assert!(caller == admin, "only admin");
+        env.storage().instance().set(&DataKey::ExecutionWindow, &new_window);
     }
 }
 

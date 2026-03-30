@@ -8,7 +8,7 @@ mod transitions;
 // wasm32-unknown-unknown`. The unit tests below focus on the auth guard,
 // which is the security-critical invariant.
 
-use crate::{GovernorContract, GovernorContractClient, GovernorSettings};
+use crate::{GovernorContract, GovernorContractClient, GovernorSettings, VoteType};
 use soroban_sdk::{
     testutils::{Address as _, MockAuth, MockAuthInvoke},
     Address, BytesN, Env, IntoVal,
@@ -55,6 +55,7 @@ fn upgrade_rejects_admin_acting_as_direct_caller() {
     let contract_id = env.register(GovernorContract, ());
 
     env.mock_all_auths();
+    let guardian = Address::generate(&env);
     GovernorContractClient::new(&env, &contract_id).initialize(
         &admin,
         &votes_token,
@@ -63,6 +64,9 @@ fn upgrade_rejects_admin_acting_as_direct_caller() {
         &1000u32,
         &40u32,
         &0i128,
+        &guardian,
+        &VoteType::Extended,
+        &120_960u32,
     );
 
     let new_wasm_hash = BytesN::from_array(&env, &[3u8; 32]);
@@ -96,6 +100,9 @@ fn update_config_rejects_caller_that_is_not_the_contract_address() {
         voting_period: 2000,
         quorum_numerator: 10,
         proposal_threshold: 500,
+        guardian: Address::generate(&env),
+        vote_type: VoteType::Extended,
+        proposal_grace_period: 120_960,
     };
 
     env.mock_auths(&[MockAuth {
@@ -121,6 +128,7 @@ fn update_config_succeeds_with_contract_self_auth() {
     let contract_id = env.register(GovernorContract, ());
     let client = GovernorContractClient::new(&env, &contract_id);
 
+    let guardian = Address::generate(&env);
     client.initialize(
         &admin,
         &votes_token,
@@ -129,6 +137,9 @@ fn update_config_succeeds_with_contract_self_auth() {
         &1000u32,
         &4u32,
         &0i128,
+        &guardian,
+        &VoteType::Extended,
+        &120_960u32,
     );
 
     let old_settings = client.get_settings();
@@ -142,6 +153,9 @@ fn update_config_succeeds_with_contract_self_auth() {
         voting_period: 2000,
         quorum_numerator: 5,
         proposal_threshold: 1000,
+        guardian: old_settings.guardian.clone(),
+        vote_type: VoteType::Simple,
+        proposal_grace_period: 604800,
     };
 
     client.update_config(&new_settings);

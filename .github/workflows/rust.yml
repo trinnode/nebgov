@@ -37,7 +37,13 @@ jobs:
         run: cargo install --locked stellar-cli
 
       - name: Build WASMs for test dependencies
-        run: stellar contract build
+        run: |
+          cargo build --target wasm32v1-none --release \
+            -p sorogov-governor \
+            -p sorogov-timelock \
+            -p sorogov-token-votes \
+            -p sorogov-governor-factory \
+            -p sorogov-treasury
 
       - name: Run tests
         run: cargo test --workspace
@@ -83,7 +89,13 @@ jobs:
         run: cargo install --locked stellar-cli
 
       - name: Build release WASM
-        run: stellar contract build
+        run: |
+          cargo build --target wasm32v1-none --release \
+            -p sorogov-governor \
+            -p sorogov-timelock \
+            -p sorogov-token-votes \
+            -p sorogov-governor-factory \
+            -p sorogov-treasury
 
       - name: Upload WASM artifacts
         uses: actions/upload-artifact@v4

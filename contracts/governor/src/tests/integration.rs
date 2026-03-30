@@ -15,7 +15,7 @@
 //!   8. Call `execute()` and verify the mock target function was invoked
 //!   9. Verify final governor state is Executed
 
-use crate::{GovernorContract, GovernorContractClient, Proposal, ProposalState, VoteSupport};
+use crate::{GovernorContract, GovernorContractClient, VoteType, Proposal, ProposalState, VoteSupport};
 
 use soroban_sdk::{
     contract, contractimpl,
@@ -98,9 +98,10 @@ fn test_full_proposal_lifecycle() {
     // 1-second minimum delay — keeps the test fast while still exercising
     // the delay enforcement path.
     let min_delay: u64 = 1;
-    timelock_client.initialize(&admin, &governor_id, &min_delay);
+    timelock_client.initialize(&admin, &governor_id, &min_delay, &1_209_600);
 
     // voting_delay = 10 ledgers, voting_period = 20 ledgers, quorum 50 %.
+    let guardian = Address::generate(&env);
     governor_client.initialize(
         &admin,
         &votes_id,
@@ -109,6 +110,9 @@ fn test_full_proposal_lifecycle() {
         &20_u32, // voting_period
         &0_u32,  // quorum_numerator (set to 0 for this simple majority test)
         &0_i128, // proposal_threshold
+        &guardian,
+        &VoteType::Extended,
+        &120_960u32,
     );
 
     // ------------------------------------------------------------------

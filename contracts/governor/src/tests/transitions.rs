@@ -3,7 +3,6 @@ use soroban_sdk::{
     contract, contractimpl, testutils::Address as _, testutils::Ledger as _, Address, Bytes, Env,
     String, Symbol,
 };
-use sorogov_timelock::TimelockError;
 
 /// Mock votes contract that returns a high vote count for any address,
 /// allowing propose() to pass the threshold check in tests.
@@ -48,7 +47,8 @@ fn setup() -> (
     let voter = Address::generate(&env);
 
     // voting_delay=10, voting_period=100, quorum_numerator=0, proposal_threshold=0
-    client.initialize(&admin, &votes_token_id, &timelock, &10, &100, &0, &0);
+    let guardian = Address::generate(&env);
+    client.initialize(&admin, &votes_token_id, &timelock, &10, &100, &0, &0, &guardian, &VoteType::Extended, &120_960);
 
     (env, client, admin, proposer, voter)
 }
@@ -212,10 +212,11 @@ fn test_proposal_execution_lifecycle() {
     // 4. Queue (Succeeded -> Queued)
     let timelock_id = env.register(sorogov_timelock::TimelockContract, ());
     let timelock_client = sorogov_timelock::TimelockContractClient::new(&env, &timelock_id);
-    timelock_client.initialize(&admin, &client.address, &0); // min_delay = 0
+    timelock_client.initialize(&admin, &client.address, &0, &1_209_600); // min_delay = 0
 
     let votes_token_id = env.register(MockVotesContract, ());
-    client.initialize(&admin, &votes_token_id, &timelock_id, &10, &100, &0, &0);
+    let guardian = Address::generate(&env);
+    client.initialize(&admin, &votes_token_id, &timelock_id, &10, &100, &0, &0, &guardian, &VoteType::Extended, &120_960);
 
     client.queue(&proposal_id);
     assert_eq!(client.state(&proposal_id), ProposalState::Queued);
@@ -266,10 +267,11 @@ fn test_execute_fails_before_timelock_delay() {
     let timelock_id = env.register(sorogov_timelock::TimelockContract, ());
     let timelock_client = sorogov_timelock::TimelockContractClient::new(&env, &timelock_id);
     // Set 1 hour delay
-    timelock_client.initialize(&admin, &client.address, &3600);
+    timelock_client.initialize(&admin, &client.address, &3600, &1_209_600);
 
     let votes_token_id = env.register(MockVotesContract, ());
-    client.initialize(&admin, &votes_token_id, &timelock_id, &10, &100, &0, &0);
+    let guardian = Address::generate(&env);
+    client.initialize(&admin, &votes_token_id, &timelock_id, &10, &100, &0, &0, &guardian, &VoteType::Extended, &120_960);
 
     client.queue(&proposal_id);
 
