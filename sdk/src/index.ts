@@ -16,6 +16,19 @@ export { GovernorClient } from "./governor";
 export { VotesClient } from "./votes";
 export { TimelockClient } from "./timelock";
 export {
+  GovernorError,
+  GovernorErrorCode,
+  TimelockError,
+  TimelockErrorCode,
+  VotesError,
+  VotesErrorCode,
+  parseGovernorError,
+  parseTimelockError,
+  parseVotesError,
+  extractContractErrorCode,
+} from "./errors";
+export type { SorobanRpcError } from "./errors";
+export {
   subscribeToProposals,
   subscribeToVotes,
   getProposalEvents,

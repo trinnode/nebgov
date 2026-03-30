@@ -106,3 +106,41 @@ export interface DelegateInfo {
   votes: bigint;
   percentOfSupply: number;
 }
+
+// ─── Votes Analytics Types ────────────────────────────────────────────────────
+
+/** A delegate's summary as returned by {@link VotesClient.getTopDelegates}. */
+export interface TopDelegate {
+  /** Stellar strkey address of the delegate */
+  address: string;
+  /** Current voting power held by this delegate */
+  votingPower: bigint;
+  /** Number of accounts currently delegating to this address */
+  delegatorCount: number;
+}
+
+/** Delegation health statistics as returned by {@link VotesClient.getVotingPowerDistribution}. */
+export interface VotingPowerDistribution {
+  /** Total voting power currently delegated across all accounts */
+  totalDelegated: bigint;
+  /** Total token supply from the votes contract */
+  totalSupply: bigint;
+  /**
+   * Fraction of total supply that is actively delegated, expressed as a
+   * value between 0 and 1 (e.g. 0.42 means 42% of tokens are delegated).
+   */
+  delegationRate: number;
+  /**
+   * Gini coefficient of voting power concentration (0 = perfectly equal,
+   * 1 = fully concentrated in one account).
+   */
+  giniCoefficient: number;
+}
+
+/** A single delegator's record as returned by {@link VotesClient.getDelegators}. */
+export interface DelegatorInfo {
+  /** Stellar strkey address of the delegator */
+  delegator: string;
+  /** Voting power this delegator contributes to the delegate */
+  power: bigint;
+}

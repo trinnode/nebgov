@@ -9,6 +9,7 @@ var mockGetTransaction = jest.fn();
 var mockIsSimulationError = jest.fn();
 
 import { TimelockClient } from "../timelock";
+import { TimelockError, TimelockErrorCode } from "../errors";
 
 jest.mock("@stellar/stellar-sdk", () => {
   const actual = jest.requireActual("@stellar/stellar-sdk");
@@ -100,7 +101,7 @@ describe("TimelockClient", () => {
       expect(mockSendTransaction).toHaveBeenCalled();
     });
 
-    it("throws error when transaction fails", async () => {
+    it("throws TimelockError(TransactionFailed) when transaction fails", async () => {
       mockSendTransaction.mockResolvedValue({
         status: "ERROR",
         error: "Unauthorized",
@@ -108,30 +109,50 @@ describe("TimelockClient", () => {
 
       await expect(
         client.schedule(mockKeypair, validCAddr, Buffer.from("calldata"), 86400n)
-      ).rejects.toThrow("schedule failed");
+      ).rejects.toThrow(TimelockError);
+
+      try {
+        await client.schedule(mockKeypair, validCAddr, Buffer.from("calldata"), 86400n);
+      } catch (e) {
+        expect((e as TimelockError).code).toBe(TimelockErrorCode.TransactionFailed);
+        expect((e as TimelockError).message).toContain("Transaction failed");
+      }
     });
 
-    it("throws error when no return value", async () => {
+    it("throws TimelockError(MissingReturnValue) when no return value", async () => {
       mockGetTransaction.mockResolvedValue({
         status: "SUCCESS",
       });
 
       await expect(
         client.schedule(mockKeypair, validCAddr, Buffer.from("calldata"), 86400n)
-      ).rejects.toThrow("schedule: missing return value");
+      ).rejects.toThrow(TimelockError);
+
+      try {
+        await client.schedule(mockKeypair, validCAddr, Buffer.from("calldata"), 86400n);
+      } catch (e) {
+        expect((e as TimelockError).code).toBe(TimelockErrorCode.MissingReturnValue);
+      }
     });
 
-    it("throws error when transaction confirmation fails", async () => {
+    it("throws TimelockError(TransactionFailed) when confirmation fails", async () => {
       mockGetTransaction.mockResolvedValue({
         status: "FAILED",
       });
 
       await expect(
         client.schedule(mockKeypair, validCAddr, Buffer.from("calldata"), 86400n)
-      ).rejects.toThrow("Transaction failed");
+      ).rejects.toThrow(TimelockError);
+
+      try {
+        await client.schedule(mockKeypair, validCAddr, Buffer.from("calldata"), 86400n);
+      } catch (e) {
+        expect((e as TimelockError).code).toBe(TimelockErrorCode.TransactionFailed);
+        expect((e as TimelockError).message).toContain("Transaction failed");
+      }
     });
 
-    it("throws error when delay is below minimum", async () => {
+    it("throws TimelockError(TransactionFailed) when delay is below minimum", async () => {
       mockSendTransaction.mockResolvedValue({
         status: "ERROR",
         error: "Delay too short",
@@ -139,7 +160,13 @@ describe("TimelockClient", () => {
 
       await expect(
         client.schedule(mockKeypair, validCAddr, Buffer.from("calldata"), 100n)
-      ).rejects.toThrow("schedule failed");
+      ).rejects.toThrow(TimelockError);
+
+      try {
+        await client.schedule(mockKeypair, validCAddr, Buffer.from("calldata"), 100n);
+      } catch (e) {
+        expect((e as TimelockError).code).toBe(TimelockErrorCode.TransactionFailed);
+      }
     });
   });
 
@@ -167,7 +194,7 @@ describe("TimelockClient", () => {
       expect(mockGetTransaction).toHaveBeenCalledWith(mockTxHash);
     });
 
-    it("throws error when transaction fails", async () => {
+    it("throws TimelockError(TransactionFailed) when transaction fails", async () => {
       mockSendTransaction.mockResolvedValue({
         status: "ERROR",
         error: "Operation not ready",
@@ -175,10 +202,16 @@ describe("TimelockClient", () => {
 
       await expect(
         client.execute(mockKeypair, mockOpId)
-      ).rejects.toThrow("execute failed");
+      ).rejects.toThrow(TimelockError);
+
+      try {
+        await client.execute(mockKeypair, mockOpId);
+      } catch (e) {
+        expect((e as TimelockError).code).toBe(TimelockErrorCode.TransactionFailed);
+      }
     });
 
-    it("throws error when operation not found", async () => {
+    it("throws TimelockError(TransactionFailed) when operation not found", async () => {
       mockSendTransaction.mockResolvedValue({
         status: "ERROR",
         error: "Operation not found",
@@ -186,10 +219,10 @@ describe("TimelockClient", () => {
 
       await expect(
         client.execute(mockKeypair, "nonexistent")
-      ).rejects.toThrow("execute failed");
+      ).rejects.toThrow(TimelockError);
     });
 
-    it("throws error when unauthorized", async () => {
+    it("throws TimelockError(TransactionFailed) when unauthorized", async () => {
       mockSendTransaction.mockResolvedValue({
         status: "ERROR",
         error: "Unauthorized",
@@ -197,7 +230,7 @@ describe("TimelockClient", () => {
 
       await expect(
         client.execute(mockKeypair, mockOpId)
-      ).rejects.toThrow("execute failed");
+      ).rejects.toThrow(TimelockError);
     });
   });
 
@@ -225,7 +258,7 @@ describe("TimelockClient", () => {
       expect(mockGetTransaction).toHaveBeenCalledWith(mockTxHash);
     });
 
-    it("throws error when transaction fails", async () => {
+    it("throws TimelockError(TransactionFailed) when transaction fails", async () => {
       mockSendTransaction.mockResolvedValue({
         status: "ERROR",
         error: "Operation already executed",
@@ -233,10 +266,16 @@ describe("TimelockClient", () => {
 
       await expect(
         client.cancel(mockKeypair, mockOpId)
-      ).rejects.toThrow("cancel failed");
+      ).rejects.toThrow(TimelockError);
+
+      try {
+        await client.cancel(mockKeypair, mockOpId);
+      } catch (e) {
+        expect((e as TimelockError).code).toBe(TimelockErrorCode.TransactionFailed);
+      }
     });
 
-    it("throws error when unauthorized", async () => {
+    it("throws TimelockError(TransactionFailed) when unauthorized", async () => {
       mockSendTransaction.mockResolvedValue({
         status: "ERROR",
         error: "Unauthorized",
@@ -244,10 +283,10 @@ describe("TimelockClient", () => {
 
       await expect(
         client.cancel(mockKeypair, mockOpId)
-      ).rejects.toThrow("cancel failed");
+      ).rejects.toThrow(TimelockError);
     });
 
-    it("throws error when operation not found", async () => {
+    it("throws TimelockError(TransactionFailed) when operation not found", async () => {
       mockSendTransaction.mockResolvedValue({
         status: "ERROR",
         error: "Operation not found",
@@ -255,7 +294,7 @@ describe("TimelockClient", () => {
 
       await expect(
         client.cancel(mockKeypair, "nonexistent")
-      ).rejects.toThrow("cancel failed");
+      ).rejects.toThrow(TimelockError);
     });
   });
 

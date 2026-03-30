@@ -20,6 +20,11 @@ import {
   Network,
   UnknownProposalStateError,
 } from "./types";
+import {
+  GovernorError,
+  GovernorErrorCode,
+  parseGovernorError,
+} from "./errors";
 
 const RPC_URLS: Record<Network, string> = {
   mainnet: "https://soroban-rpc.mainnet.stellar.gateway.fm",
@@ -53,8 +58,6 @@ function scVecBytes(blobs: (Buffer | Uint8Array)[]): xdr.ScVal {
 
 /**
  * GovernorClient — interact with a deployed NebGov governor contract.
- *
- * TODO issue #14: add full error handling, retry logic, and simulation flow.
  */
 export class GovernorClient {
   private readonly config: GovernorConfig;
@@ -86,10 +89,16 @@ export class GovernorClient {
       targets.length !== fnNames.length ||
       targets.length !== calldatas.length
     ) {
-      throw new Error("targets, fnNames, and calldatas must have the same length");
+      throw new GovernorError(
+        GovernorErrorCode.InvalidArguments,
+        "Invalid arguments: targets, fnNames, and calldatas must have the same length"
+      );
     }
     if (targets.length === 0) {
-      throw new Error("At least one on-chain action is required");
+      throw new GovernorError(
+        GovernorErrorCode.InvalidArguments,
+        "Invalid arguments: at least one on-chain action is required"
+      );
     }
 
     const account = await this.server.getAccount(signer.publicKey());
@@ -116,7 +125,7 @@ export class GovernorClient {
 
     const result = await this.server.sendTransaction(prepared);
     if (result.status === "ERROR") {
-      throw new Error(`Transaction failed: ${JSON.stringify(result)}`);
+      throw parseGovernorError(result);
     }
 
     const confirmed = await this.pollForConfirmation(result.hash);
@@ -139,10 +148,16 @@ export class GovernorClient {
       targets.length !== fnNames.length ||
       targets.length !== calldatas.length
     ) {
-      throw new Error("targets, fnNames, and calldatas must have the same length");
+      throw new GovernorError(
+        GovernorErrorCode.InvalidArguments,
+        "Invalid arguments: targets, fnNames, and calldatas must have the same length"
+      );
     }
     if (targets.length === 0) {
-      throw new Error("At least one on-chain action is required");
+      throw new GovernorError(
+        GovernorErrorCode.InvalidArguments,
+        "Invalid arguments: at least one on-chain action is required"
+      );
     }
 
     const account = await this.server.getAccount(signerPublicKey);
@@ -168,7 +183,7 @@ export class GovernorClient {
     const signed = TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
     const result = await this.server.sendTransaction(signed);
     if (result.status === "ERROR") {
-      throw new Error(`Transaction failed: ${JSON.stringify(result)}`);
+      throw parseGovernorError(result);
     }
     const confirmed = await this.pollForConfirmation(result.hash);
     const returnVal = confirmed.returnValue;
@@ -319,14 +334,13 @@ export class GovernorClient {
     prepared.sign(signer);
     const result = await this.server.sendTransaction(prepared);
     if (result.status === "ERROR") {
-      throw new Error(`castVote failed: ${JSON.stringify(result)}`);
+      throw parseGovernorError(result);
     }
     await this.pollForConfirmation(result.hash);
   }
 
   /**
    * Get the current state of a proposal.
-   * TODO issue #17: decode all 7 ProposalState variants.
    */
   async getProposalState(proposalId: bigint): Promise<ProposalState> {
     const result = await this.server.simulateTransaction(
@@ -342,12 +356,17 @@ export class GovernorClient {
     );
 
     if (SorobanRpc.Api.isSimulationError(result)) {
-      throw new Error(`Simulation error: ${result.error}`);
+      throw parseGovernorError(result);
     }
 
     const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
       .result?.retval;
-    if (!raw) throw new Error("No return value");
+    if (!raw) {
+      throw new GovernorError(
+        GovernorErrorCode.ProposalNotFound,
+        "Proposal not found"
+      );
+    }
 
     return this.decodeProposalState(raw);
   }
@@ -358,7 +377,10 @@ export class GovernorClient {
   private decodeProposalState(raw: xdr.ScVal): ProposalState {
     const native = scValToNative(raw);
     if (!Array.isArray(native) || native.length === 0) {
-      throw new Error("Invalid ScVal format for ProposalState enum");
+      throw new GovernorError(
+        GovernorErrorCode.UnknownState,
+        "Invalid ScVal format for ProposalState enum"
+      );
     }
 
     const variant = native[0];
@@ -371,8 +393,6 @@ export class GovernorClient {
       Executed: ProposalState.Executed,
       Cancelled: ProposalState.Cancelled,
     };
-
-    // DEBUG: throw info
 
     if (variant in states) {
       return states[variant];
@@ -401,12 +421,17 @@ export class GovernorClient {
     );
 
     if (SorobanRpc.Api.isSimulationError(result)) {
-      throw new Error(`Simulation error: ${result.error}`);
+      throw parseGovernorError(result);
     }
 
     const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
       .result?.retval;
-    if (!raw) throw new Error("No return value");
+    if (!raw) {
+      throw new GovernorError(
+        GovernorErrorCode.ProposalNotFound,
+        "No return value"
+      );
+    }
 
     const [votesFor, votesAgainst, votesAbstain] = scValToNative(raw) as [
       bigint,
@@ -528,9 +553,15 @@ export class GovernorClient {
         return status as SorobanRpc.Api.GetSuccessfulTransactionResponse;
       }
       if (status.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
-        throw new Error(`Transaction failed: ${hash}`);
+        throw new GovernorError(
+          GovernorErrorCode.TransactionFailed,
+          `Transaction failed: ${hash}`
+        );
       }
     }
-    throw new Error(`Transaction not confirmed after ${retries} retries`);
+    throw new GovernorError(
+      GovernorErrorCode.TransactionTimeout,
+      `Transaction not confirmed after ${retries} retries`
+    );
   }
 }
