@@ -91,6 +91,17 @@ export interface TreasuryTx {
   cancelled: boolean;
 }
 
+export interface ProposalAction {
+  target: string;
+  function: string;
+  args: any[];
+}
+
+export interface ProposalSimulationResult {
+  success: boolean;
+  computeUnits?: number;
+  stateChanges?: any[];
+  error?: string;
 export interface GovernorSettings {
   votingDelay: number;
   votingPeriod: number;
@@ -105,4 +116,62 @@ export interface DelegateInfo {
   address: string;
   votes: bigint;
   percentOfSupply: number;
+}
+
+// ─── Votes Analytics Types ────────────────────────────────────────────────────
+
+/** A delegate's summary as returned by {@link VotesClient.getTopDelegates}. */
+export interface TopDelegate {
+  /** Stellar strkey address of the delegate */
+  address: string;
+  /** Current voting power held by this delegate */
+  votingPower: bigint;
+  /** Number of accounts currently delegating to this address */
+  delegatorCount: number;
+}
+
+/** Delegation health statistics as returned by {@link VotesClient.getVotingPowerDistribution}. */
+export interface VotingPowerDistribution {
+  /** Total voting power currently delegated across all accounts */
+  totalDelegated: bigint;
+  /** Total token supply from the votes contract */
+  totalSupply: bigint;
+  /**
+   * Fraction of total supply that is actively delegated, expressed as a
+   * value between 0 and 1 (e.g. 0.42 means 42% of tokens are delegated).
+   */
+  delegationRate: number;
+  /**
+   * Gini coefficient of voting power concentration (0 = perfectly equal,
+   * 1 = fully concentrated in one account).
+   */
+  giniCoefficient: number;
+}
+
+/** A single delegator's record as returned by {@link VotesClient.getDelegators}. */
+export interface DelegatorInfo {
+  /** Stellar strkey address of the delegator */
+  delegator: string;
+  /** Voting power this delegator contributes to the delegate */
+  power: bigint;
+}
+
+// ─── Treasury Types ───────────────────────────────────────────────────────────
+
+/** Configuration for {@link TreasuryClient}. */
+export interface TreasuryConfig {
+  /** Contract address of the treasury */
+  treasuryAddress: string;
+  /** Stellar network to connect to */
+  network: Network;
+  /** RPC URL override (optional — defaults to public horizon) */
+  rpcUrl?: string;
+}
+
+/** A single recipient in a batch transfer operation. */
+export interface BatchTransferRecipient {
+  /** Stellar strkey address of the recipient */
+  address: string;
+  /** Amount of tokens to transfer (in the token's base unit) */
+  amount: bigint;
 }

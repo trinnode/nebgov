@@ -14,6 +14,11 @@ pub enum GovernorError {
     UnauthorizedCancel = 1,
     InvalidSupport = 2,
     ProposalExpired = 3,
+    CalldataTooLarge = 4,
+    InvalidCalldata = 5,
+    ProposalRateLimited = 6,
+    ContractPaused = 7,
+    UnauthorizedPause = 8,
 }
 
 /// Cross-contract interface for the Timelock contract.
@@ -153,6 +158,14 @@ pub struct GovernorSettings {
     pub reflector_oracle: Option<Address>,
     /// Minimum quorum expressed in USD (6-decimal format, matching Reflector prices).
     pub min_quorum_usd: i128,
+    /// Maximum calldata size per action in bytes.
+    pub max_calldata_size: u32,
+    /// Minimum ledgers between proposals from the same address (cooldown period).
+    pub proposal_cooldown: u32,
+    /// Maximum proposals per period (period measured in ledgers).
+    pub max_proposals_per_period: u32,
+    /// Period duration in ledgers for proposal rate limiting.
+    pub proposal_period_duration: u32,
 }
 
 /// Vote support options.
@@ -202,6 +215,22 @@ pub enum DataKey {
     ReflectorOracle,
     /// Minimum quorum floor in USD (6-decimal format).
     MinQuorumUsd,
+    /// Address authorized to pause/unpause the contract.
+    Pauser,
+    /// Whether the contract is currently paused.
+    IsPaused,
+    /// Last proposal ledger for an address (for cooldown).
+    LastProposalLedger(Address),
+    /// Proposal count for an address in current period.
+    ProposalsInPeriod(Address, u32),
+    /// Maximum calldata size per action in bytes.
+    MaxCalldataSize,
+    /// Minimum ledgers between proposals from the same address (cooldown period).
+    ProposalCooldown,
+    /// Maximum proposals per period (period measured in ledgers).
+    MaxProposalsPerPeriod,
+    /// Period duration in ledgers for proposal rate limiting.
+    ProposalPeriodDuration,
 }
 
 #[contract]
@@ -280,6 +309,23 @@ impl GovernorContract {
         env.storage()
             .instance()
             .set(&DataKey::UseDynamicQuorum, &false);
+        // Initialize new security settings with defaults
+        env.storage()
+            .instance()
+            .set(&DataKey::MaxCalldataSize, &10_000u32); // 10KB max calldata
+        env.storage()
+            .instance()
+            .set(&DataKey::ProposalCooldown, &100u32); // ~10 min cooldown
+        env.storage()
+            .instance()
+            .set(&DataKey::MaxProposalsPerPeriod, &5u32); // 5 proposals per period
+        env.storage()
+            .instance()
+            .set(&DataKey::ProposalPeriodDuration, &10_000u32); // ~24 hour period
+        // Initialize pause state (not paused by default)
+        env.storage().instance().set(&DataKey::IsPaused, &false);
+        // Set admin as initial pauser
+        env.storage().instance().set(&DataKey::Pauser, &admin);
     }
 
     /// Create a new governance proposal.
@@ -301,12 +347,76 @@ impl GovernorContract {
     ) -> u64 {
         proposer.require_auth();
 
+        // Check if contract is paused
+        let is_paused: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::IsPaused)
+            .unwrap_or(false);
+        if is_paused {
+            env.panic_with_error(GovernorError::ContractPaused);
+        }
+
         // Validate all vectors have the same length
         assert!(
             targets.len() == fn_names.len() && targets.len() == calldatas.len(),
             "targets, fn_names, and calldatas length mismatch"
         );
         assert!(!targets.is_empty(), "must have at least one target");
+
+        // Validate calldata size limits (Issue #186)
+        let max_calldata_size: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MaxCalldataSize)
+            .unwrap_or(10_000);
+        for i in 0..calldatas.len() {
+            let calldata = calldatas.get(i).unwrap();
+            if calldata.len() > max_calldata_size {
+                env.panic_with_error(GovernorError::CalldataTooLarge);
+            }
+        }
+
+        // Rate limiting checks (Issue #188)
+        let current_ledger = env.ledger().sequence();
+        
+        // Check cooldown period
+        let cooldown: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ProposalCooldown)
+            .unwrap_or(100);
+        let last_proposal_ledger: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::LastProposalLedger(proposer.clone()))
+            .unwrap_or(0);
+        if current_ledger < last_proposal_ledger + cooldown {
+            env.panic_with_error(GovernorError::ProposalRateLimited);
+        }
+
+        // Check max proposals per period
+        let period_duration: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ProposalPeriodDuration)
+            .unwrap_or(10_000);
+        let max_proposals: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MaxProposalsPerPeriod)
+            .unwrap_or(5);
+        
+        let current_period = current_ledger / period_duration;
+        let proposals_in_period: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ProposalsInPeriod(proposer.clone(), current_period))
+            .unwrap_or(0);
+        
+        if proposals_in_period >= max_proposals {
+            env.panic_with_error(GovernorError::ProposalRateLimited);
+        }
 
         // Get the voting power of the proposer (strategy-aware)
         let proposer_votes = Self::compute_proposer_votes(&env, &proposer);
@@ -367,7 +477,27 @@ impl GovernorContract {
             .instance()
             .set(&DataKey::ProposalCount, &proposal_id);
 
-        events::emit_proposal_created(&env, &proposal);
+        // Update rate limiting storage
+        env.storage()
+            .persistent()
+            .set(&DataKey::LastProposalLedger(proposer.clone()), &current);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ProposalsInPeriod(proposer.clone(), current_period), &(proposals_in_period + 1));
+
+        // Emit ProposalCreated event with all proposal fields
+        env.events().publish(
+            (symbol_short!("prop_crtd"), proposer.clone()),
+            (
+                proposal_id,
+                description,
+                targets,
+                fn_names,
+                calldatas,
+                current + voting_delay,
+                current + voting_delay + voting_period,
+            ),
+        );
 
         proposal_id
     }
@@ -498,6 +628,16 @@ impl GovernorContract {
     ///
     /// Schedules every action in the proposal via the Timelock contract.
     pub fn queue(env: Env, proposal_id: u64) {
+        // Check if contract is paused
+        let is_paused: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::IsPaused)
+            .unwrap_or(false);
+        if is_paused {
+            env.panic_with_error(GovernorError::ContractPaused);
+        }
+
         let proposal_state = Self::state(env.clone(), proposal_id);
 
         if proposal_state == ProposalState::Expired {
@@ -557,6 +697,16 @@ impl GovernorContract {
     /// Delegates to the timelock to enforce the delay, which in turn invokes
     /// `proposal.fn_name()` on `proposal.target`.
     pub fn execute(env: Env, proposal_id: u64) {
+        // Check if contract is paused
+        let is_paused: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::IsPaused)
+            .unwrap_or(false);
+        if is_paused {
+            env.panic_with_error(GovernorError::ContractPaused);
+        }
+
         assert!(
             Self::state(env.clone(), proposal_id) == ProposalState::Queued,
             "proposal not queued"
@@ -855,6 +1005,26 @@ impl GovernorContract {
                 .instance()
                 .get(&DataKey::MinQuorumUsd)
                 .unwrap_or(0),
+            max_calldata_size: env
+                .storage()
+                .instance()
+                .get(&DataKey::MaxCalldataSize)
+                .unwrap_or(10_000),
+            proposal_cooldown: env
+                .storage()
+                .instance()
+                .get(&DataKey::ProposalCooldown)
+                .unwrap_or(100),
+            max_proposals_per_period: env
+                .storage()
+                .instance()
+                .get(&DataKey::MaxProposalsPerPeriod)
+                .unwrap_or(5),
+            proposal_period_duration: env
+                .storage()
+                .instance()
+                .get(&DataKey::ProposalPeriodDuration)
+                .unwrap_or(10_000),
         }
     }
 
@@ -894,8 +1064,20 @@ impl GovernorContract {
         env.storage()
             .instance()
             .set(&DataKey::MinQuorumUsd, &new_settings.min_quorum_usd);
-        match &new_settings.reflector_oracle {
-            Some(addr) => env
+        env.storage()
+            .instance()
+            .set(&DataKey::MaxCalldataSize, &new_settings.max_calldata_size);
+        env.storage()
+            .instance()
+            .set(&DataKey::ProposalCooldown, &new_settings.proposal_cooldown);
+        env.storage()
+            .instance()
+            .set(&DataKey::MaxProposalsPerPeriod, &new_settings.max_proposals_per_period);
+        env.storage()
+            .instance()
+            .set(&DataKey::ProposalPeriodDuration, &new_settings.proposal_period_duration);
+        match new_settings.reflector_oracle {
+            Some(ref addr) => env
                 .storage()
                 .instance()
                 .set(&DataKey::ReflectorOracle, addr),
@@ -1071,6 +1253,102 @@ impl GovernorContract {
         env.current_contract_address().require_auth();
         // TODO: implement storage migration logic when a breaking storage
         // change is introduced in a future upgrade.
+    }
+
+    // ============================================================================
+    // Emergency Pause Mechanism (Issue #191)
+    // ============================================================================
+
+    /// Pause the contract to prevent critical operations during emergencies.
+    /// Only the pauser role can call this function.
+    pub fn pause(env: Env, caller: Address) {
+        caller.require_auth();
+
+        let pauser: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Pauser)
+            .expect("pauser not set");
+
+        if caller != pauser {
+            env.panic_with_error(GovernorError::UnauthorizedPause);
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::IsPaused, &true);
+
+        env.events().publish(
+            (symbol_short!("paused"),),
+            (caller, env.ledger().sequence()),
+        );
+    }
+
+    /// Unpause the contract to resume normal operations.
+    /// Only callable via governance proposal (requires contract self-auth).
+    pub fn unpause(env: Env) {
+        env.current_contract_address().require_auth();
+
+        env.storage()
+            .instance()
+            .set(&DataKey::IsPaused, &false);
+
+        env.events().publish(
+            (symbol_short!("unpaused"),),
+            env.ledger().sequence(),
+        );
+    }
+
+    /// Check if the contract is currently paused.
+    pub fn is_paused(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::IsPaused)
+            .unwrap_or(false)
+    }
+
+    /// Get the current pauser address.
+    pub fn pauser(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::Pauser)
+            .expect("pauser not set")
+    }
+
+    /// Update the pauser address (governance-gated).
+    pub fn set_pauser(env: Env, new_pauser: Address) {
+        env.current_contract_address().require_auth();
+
+        let old_pauser: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Pauser)
+            .expect("pauser not set");
+
+        env.storage()
+            .instance()
+            .set(&DataKey::Pauser, &new_pauser);
+
+        env.events().publish(
+            (Symbol::new(&env, "PauserChanged"),),
+            (old_pauser, new_pauser),
+        );
+    }
+
+    // ============================================================================
+    // UUPS Proxy Pattern (Issue #195)
+    // ============================================================================
+
+    /// Get the implementation address for UUPS proxy pattern.
+    /// For native Soroban upgradeability, this returns the current contract address.
+    pub fn implementation(env: Env) -> Address {
+        env.current_contract_address()
+    }
+
+    /// Get the proxy admin address (for UUPS pattern compatibility).
+    /// Returns the contract's own address since upgrades are governance-gated.
+    pub fn proxy_admin(env: Env) -> Address {
+        env.current_contract_address()
     }
 }
 
