@@ -492,6 +492,40 @@ export class GovernorClient {
     return { votesFor, votesAgainst, votesAbstain };
   }
 
+  /**
+   * Check if an address has voted on a proposal.
+   * Returns true if the address has cast a vote.
+   */
+  async hasVoted(proposalId: bigint, voter: string): Promise<boolean> {
+    try {
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(
+          await this.server.getAccount(this.config.governorAddress),
+          { fee: BASE_FEE, networkPassphrase: this.networkPassphrase }
+        )
+          .addOperation(
+            this.contract.call(
+              "has_voted",
+              nativeToScVal(proposalId, { type: "u64" }),
+              nativeToScVal(voter, { type: "address" })
+            )
+          )
+          .setTimeout(30)
+          .build()
+      );
+
+      if (SorobanRpc.Api.isSimulationError(result)) {
+        return false;
+      }
+
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      return raw ? Boolean(scValToNative(raw)) : false;
+    } catch {
+      return false;
+    }
+  }
+
   /** Current Soroban ledger sequence from the RPC backing this client. */
   async getLatestLedger(): Promise<number> {
     const info = await this.server.getLatestLedger();

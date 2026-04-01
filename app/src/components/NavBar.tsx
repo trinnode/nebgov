@@ -17,6 +17,7 @@ import {
   Wallet2,
   Sun,
   Moon,
+  Bell,
 } from "lucide-react";
 import { useTheme } from "../hooks/useTheme";
 import toast from "react-hot-toast";
@@ -205,7 +206,7 @@ export function NavBar() {
 
                       <Link
                         role="menuitem"
-                        href={`/profile?address=${publicKey}`}
+                        href={publicKey ? `/profile/${publicKey}` : "/"}
                         className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-600 hover:bg-gray-50 transition-colors"
                       >
                         <User className="w-4 h-4" aria-hidden />
