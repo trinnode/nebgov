@@ -143,5 +143,7 @@ Open [http://localhost:3000](http://localhost:3000).
 ## Next Steps
 
 - Read the [Architecture Overview](./architecture.md) to understand the full contract flow
+- Review the [Governance Parameter Tuning Guide](./parameter-guide.md) before mainnet deployment
+- Read [Security Notes](./security.md) for treasury execution protections and risks
 - See the [SDK API Reference](./sdk.md) for all available methods
 - Open an issue or PR to contribute — see [CONTRIBUTING.md](../CONTRIBUTING.md)

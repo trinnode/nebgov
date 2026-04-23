@@ -860,9 +860,32 @@ impl GovernorContract {
         events::emit_proposal_executed(&env, proposal_id, &gov_addr);
     }
 
-    /// Cancel a proposal with proper authorization.
-    /// Proposer can cancel their own proposal while it is Pending.
-    /// Guardian can cancel any Active proposal as an emergency veto.
+    /// Execute multiple queued proposals in order.
+    ///
+    /// Performs a full queued-state preflight for every proposal before
+    /// executing any of them, avoiding partial completion in malformed batches.
+    pub fn execute_batch(env: Env, proposal_ids: Vec<u64>) {
+        assert!(!proposal_ids.is_empty(), "empty batch");
+
+        for i in 0..proposal_ids.len() {
+            let proposal_id = proposal_ids.get(i).expect("proposal missing");
+            assert!(
+                Self::state(env.clone(), proposal_id) == ProposalState::Queued,
+                "proposal not queued"
+            );
+        }
+
+        for i in 0..proposal_ids.len() {
+            let proposal_id = proposal_ids.get(i).expect("proposal missing");
+            Self::execute(env.clone(), proposal_id);
+        }
+
+        env.events()
+            .publish((symbol_short!("exbatch"),), proposal_ids);
+    }
+
+    /// Cancel a proposal. Only proposer or admin can cancel.
+    /// TODO issue #7: enforce cancellation rules, emit event.
     pub fn cancel(env: Env, caller: Address, proposal_id: u64) {
         caller.require_auth();
 

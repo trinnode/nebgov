@@ -7,6 +7,7 @@ import {
   Keypair,
   nativeToScVal,
   scValToNative,
+  xdr,
 } from "@stellar/stellar-sdk";
 import { GovernorConfig, Network } from "./types";
 import {
@@ -42,7 +43,7 @@ const NETWORK_PASSPHRASES: Record<Network, string> = {
  *   network: "testnet",
  * });
  *
- * const opId = await client.schedule(signer, targetAddress, calldata, 86400n);
+ * const opId = await client.schedule(signer, targetAddress, calldata, "execute", 86400n);
  * const ready = await client.isReady(opId);
  * if (ready) await client.execute(signer, opId);
  */
@@ -76,6 +77,7 @@ export class TimelockClient {
     signer: Keypair,
     target: string,
     data: Buffer,
+    fnName: string,
     delay: bigint
   ): Promise<string> {
     const account = await this.server.getAccount(signer.publicKey());
@@ -90,6 +92,7 @@ export class TimelockClient {
           nativeToScVal(signer.publicKey(), { type: "address" }),
           nativeToScVal(target, { type: "address" }),
           nativeToScVal(data, { type: "bytes" }),
+          nativeToScVal(fnName, { type: "symbol" }),
           nativeToScVal(delay, { type: "u64" })
         )
       )
@@ -115,6 +118,85 @@ export class TimelockClient {
 
     const bytes = scValToNative(returnVal) as Uint8Array;
     return Buffer.from(bytes).toString("hex");
+  }
+
+  /**
+   * Schedule multiple timelock operations in a single transaction.
+   *
+   * Every array argument must have the same length.
+   *
+   * @returns Hex-encoded operation IDs in the same order as the inputs.
+   */
+  async scheduleBatch(
+    signer: Keypair,
+    targets: string[],
+    data: Array<Buffer | Uint8Array>,
+    fnNames: string[],
+    delay: bigint,
+    predecessors: Array<Buffer | Uint8Array>,
+    salts: Array<Buffer | Uint8Array>
+  ): Promise<string[]> {
+    const len = targets.length;
+    if (len === 0) throw new Error("scheduleBatch requires at least one operation");
+    if (
+      data.length !== len ||
+      fnNames.length !== len ||
+      predecessors.length !== len ||
+      salts.length !== len
+    ) {
+      throw new Error("scheduleBatch input arrays must have equal length");
+    }
+
+    const account = await this.server.getAccount(signer.publicKey());
+    const targetsScVal = xdr.ScVal.scvVec(
+      targets.map((item) => nativeToScVal(item, { type: "address" }))
+    );
+    const dataScVal = xdr.ScVal.scvVec(
+      data.map((item) => nativeToScVal(item, { type: "bytes" }))
+    );
+    const fnNamesScVal = xdr.ScVal.scvVec(
+      fnNames.map((item) => nativeToScVal(item, { type: "symbol" }))
+    );
+    const predecessorsScVal = xdr.ScVal.scvVec(
+      predecessors.map((item) => nativeToScVal(item, { type: "bytes" }))
+    );
+    const saltsScVal = xdr.ScVal.scvVec(
+      salts.map((item) => nativeToScVal(item, { type: "bytes" }))
+    );
+
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(
+        this.contract.call(
+          "schedule_batch",
+          nativeToScVal(signer.publicKey(), { type: "address" }),
+          targetsScVal,
+          dataScVal,
+          fnNamesScVal,
+          nativeToScVal(delay, { type: "u64" }),
+          predecessorsScVal,
+          saltsScVal
+        )
+      )
+      .setTimeout(30)
+      .build();
+
+    const prepared = await this.server.prepareTransaction(tx);
+    prepared.sign(signer);
+
+    const result = await this.server.sendTransaction(prepared);
+    if (result.status === "ERROR") {
+      throw new Error(`scheduleBatch failed: ${JSON.stringify(result)}`);
+    }
+
+    const confirmed = await this.pollForConfirmation(result.hash);
+    const returnVal = confirmed.returnValue;
+    if (!returnVal) throw new Error("scheduleBatch: missing return value");
+
+    const rawIds = scValToNative(returnVal) as Uint8Array[];
+    return rawIds.map((bytes) => Buffer.from(bytes).toString("hex"));
   }
 
   /**
