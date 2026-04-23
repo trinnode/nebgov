@@ -25,6 +25,25 @@ fn count_topic(env: &Env, topic_name: &str) -> usize {
         .count()
 }
 
+fn settings_with_defaults(_env: &Env, guardian: Address) -> GovernorSettings {
+    GovernorSettings {
+        voting_delay: 200,
+        voting_period: 2000,
+        quorum_numerator: 10,
+        proposal_threshold: 500,
+        guardian,
+        vote_type: VoteType::Extended,
+        proposal_grace_period: 120_960,
+        use_dynamic_quorum: false,
+        reflector_oracle: None,
+        min_quorum_usd: 0,
+        max_calldata_size: 10_000,
+        proposal_cooldown: 100,
+        max_proposals_per_period: 5,
+        proposal_period_duration: 10_000,
+    }
+}
+
 #[test]
 #[should_panic]
 fn upgrade_rejects_caller_that_is_not_the_contract_address() {
@@ -106,18 +125,7 @@ fn update_config_rejects_caller_that_is_not_the_contract_address() {
     let client = GovernorContractClient::new(&env, &contract_id);
 
     let attacker = Address::generate(&env);
-    let new_settings = GovernorSettings {
-        voting_delay: 200,
-        voting_period: 2000,
-        quorum_numerator: 10,
-        proposal_threshold: 500,
-        guardian: Address::generate(&env),
-        vote_type: VoteType::Extended,
-        proposal_grace_period: 120_960,
-        use_dynamic_quorum: false,
-        reflector_oracle: None,
-        min_quorum_usd: 0,
-    };
+    let new_settings = settings_with_defaults(&env, Address::generate(&env));
 
     env.mock_auths(&[MockAuth {
         address: &attacker,
@@ -162,18 +170,13 @@ fn update_config_succeeds_with_contract_self_auth() {
     assert_eq!(old_settings.quorum_numerator, 4);
     assert_eq!(old_settings.proposal_threshold, 0);
 
-    let new_settings = GovernorSettings {
-        voting_delay: 200,
-        voting_period: 2000,
-        quorum_numerator: 5,
-        proposal_threshold: 1000,
-        guardian: old_settings.guardian.clone(),
-        vote_type: VoteType::Simple,
-        proposal_grace_period: 604800,
-        use_dynamic_quorum: false,
-        reflector_oracle: None,
-        min_quorum_usd: 0,
-    };
+    let mut new_settings = old_settings.clone();
+    new_settings.voting_delay = 200;
+    new_settings.voting_period = 2000;
+    new_settings.quorum_numerator = 5;
+    new_settings.proposal_threshold = 1000;
+    new_settings.vote_type = VoteType::Simple;
+    new_settings.proposal_grace_period = 604800;
 
     client.update_config(&new_settings);
 
@@ -183,6 +186,130 @@ fn update_config_succeeds_with_contract_self_auth() {
     assert_eq!(updated.quorum_numerator, 5);
     assert_eq!(updated.proposal_threshold, 1000);
     assert_eq!(count_topic(&env, "ConfigUpdated"), 1);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #10)")]
+fn update_config_rejects_excessive_voting_delay() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let votes_token = Address::generate(&env);
+    let timelock = Address::generate(&env);
+    let contract_id = env.register(GovernorContract, ());
+    let client = GovernorContractClient::new(&env, &contract_id);
+    let guardian = Address::generate(&env);
+
+    client.initialize(
+        &admin,
+        &votes_token,
+        &timelock,
+        &100u32,
+        &1000u32,
+        &4u32,
+        &0i128,
+        &guardian,
+        &VoteType::Extended,
+        &120_960u32,
+    );
+
+    let mut settings = client.get_settings();
+    settings.voting_delay = 1_209_601;
+
+    client.update_config(&settings);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #11)")]
+fn update_config_rejects_short_voting_period() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let votes_token = Address::generate(&env);
+    let timelock = Address::generate(&env);
+    let contract_id = env.register(GovernorContract, ());
+    let client = GovernorContractClient::new(&env, &contract_id);
+    let guardian = Address::generate(&env);
+
+    client.initialize(
+        &admin,
+        &votes_token,
+        &timelock,
+        &100u32,
+        &1000u32,
+        &4u32,
+        &0i128,
+        &guardian,
+        &VoteType::Extended,
+        &120_960u32,
+    );
+
+    let mut settings = client.get_settings();
+    settings.voting_period = 0;
+
+    client.update_config(&settings);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #12)")]
+fn update_config_rejects_invalid_quorum_numerator() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let votes_token = Address::generate(&env);
+    let timelock = Address::generate(&env);
+    let contract_id = env.register(GovernorContract, ());
+    let client = GovernorContractClient::new(&env, &contract_id);
+    let guardian = Address::generate(&env);
+
+    client.initialize(
+        &admin,
+        &votes_token,
+        &timelock,
+        &100u32,
+        &1000u32,
+        &4u32,
+        &0i128,
+        &guardian,
+        &VoteType::Extended,
+        &120_960u32,
+    );
+
+    let mut settings = client.get_settings();
+    settings.quorum_numerator = 0;
+
+    client.update_config(&settings);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #13)")]
+fn update_config_rejects_negative_proposal_threshold() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let votes_token = Address::generate(&env);
+    let timelock = Address::generate(&env);
+    let contract_id = env.register(GovernorContract, ());
+    let client = GovernorContractClient::new(&env, &contract_id);
+    let guardian = Address::generate(&env);
+
+    client.initialize(
+        &admin,
+        &votes_token,
+        &timelock,
+        &100u32,
+        &1000u32,
+        &4u32,
+        &0i128,
+        &guardian,
+        &VoteType::Extended,
+        &120_960u32,
+    );
+
+    let mut settings = client.get_settings();
+    settings.proposal_threshold = -1;
+
+    client.update_config(&settings);
 }
 
 #[test]

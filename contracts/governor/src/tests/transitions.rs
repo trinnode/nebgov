@@ -98,6 +98,33 @@ fn test_pending_state_before_start_ledger() {
 }
 
 #[test]
+/// Verifies that the governor returns a deterministic execution cost estimate.
+fn test_estimate_execution_gas_returns_cost_hint() {
+    let (env, client, _, proposer, _) = setup();
+    let proposal_id = make_proposal(&env, &client, &proposer);
+
+    let estimate = client.estimate_execution_gas(&proposal_id);
+
+    assert_eq!(estimate.proposal_id, proposal_id);
+    assert_eq!(estimate.action_count, 1);
+    assert_eq!(estimate.calldata_bytes, 0);
+    assert!(estimate.estimated_cpu_insns > 0);
+    assert!(estimate.estimated_mem_bytes > 0);
+    assert!(estimate.estimated_fee_stroops > 0);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #14)")]
+/// Verifies that cancelled proposals are not cost-estimated.
+fn test_estimate_execution_gas_rejects_cancelled_proposal() {
+    let (env, client, _, proposer, _) = setup();
+    let proposal_id = make_proposal(&env, &client, &proposer);
+
+    client.cancel(&proposer, &proposal_id);
+    client.estimate_execution_gas(&proposal_id);
+}
+
+#[test]
 /// Verifies that a proposal becomes Active exactly at the start_ledger.
 fn test_active_state_at_start_ledger() {
     let (env, client, _, proposer, _) = setup();

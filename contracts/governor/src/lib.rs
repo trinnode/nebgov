@@ -19,6 +19,12 @@ pub enum GovernorError {
     ProposalRateLimited = 6,
     ContractPaused = 7,
     UnauthorizedPause = 8,
+    EmptyMetadataUri = 9,
+    InvalidVotingDelay = 10,
+    InvalidVotingPeriod = 11,
+    InvalidQuorumNumerator = 12,
+    InvalidProposalThreshold = 13,
+    InvalidGasEstimationState = 14,
 }
 
 /// Cross-contract interface for the Timelock contract.
@@ -173,6 +179,18 @@ pub struct GovernorSettings {
     pub proposal_period_duration: u32,
 }
 
+/// Estimated resource cost for executing a proposal.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExecutionGasEstimate {
+    pub proposal_id: u64,
+    pub action_count: u32,
+    pub calldata_bytes: u32,
+    pub estimated_cpu_insns: u64,
+    pub estimated_mem_bytes: u64,
+    pub estimated_fee_stroops: i128,
+}
+
 /// Vote support options.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -251,19 +269,38 @@ pub enum DataKey {
     ProposalPeriodDuration,
 }
 
-/// Errors returned by the governor contract.
-#[contracterror]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
-pub enum GovernorError {
-    /// Proposal metadata URI cannot be empty.
-    EmptyMetadataUri = 1,
-}
+const MAX_VOTING_DELAY: u32 = 1_209_600;
+const MIN_VOTING_PERIOD: u32 = 1;
+const EXECUTION_BASE_CPU_INSNS: u64 = 75_000;
+const EXECUTION_CPU_INSNS_PER_ACTION: u64 = 50_000;
+const EXECUTION_CPU_INSNS_PER_CALLDATA_BYTE: u64 = 20;
+const EXECUTION_BASE_MEM_BYTES: u64 = 1_024;
+const EXECUTION_MEM_BYTES_PER_ACTION: u64 = 512;
+const EXECUTION_MEM_BYTES_PER_CALLDATA_BYTE: u64 = 2;
+const EXECUTION_BASE_FEE_STROOPS: i128 = 100;
+const EXECUTION_FEE_STROOPS_PER_ACTION: i128 = 10_000;
+const EXECUTION_FEE_STROOPS_PER_CALLDATA_BYTE: i128 = 2;
 
 #[contract]
 pub struct GovernorContract;
 
 #[contractimpl]
 impl GovernorContract {
+    fn validate_settings(env: &Env, settings: &GovernorSettings) {
+        if settings.voting_delay > MAX_VOTING_DELAY {
+            env.panic_with_error(GovernorError::InvalidVotingDelay);
+        }
+        if settings.voting_period < MIN_VOTING_PERIOD {
+            env.panic_with_error(GovernorError::InvalidVotingPeriod);
+        }
+        if settings.quorum_numerator == 0 || settings.quorum_numerator > 100 {
+            env.panic_with_error(GovernorError::InvalidQuorumNumerator);
+        }
+        if settings.proposal_threshold < 0 {
+            env.panic_with_error(GovernorError::InvalidProposalThreshold);
+        }
+    }
+
     fn emit_proposal_expired_if_needed(env: &Env, proposal: &Proposal) {
         let expired_emitted: bool = env
             .storage()
@@ -860,6 +897,62 @@ impl GovernorContract {
         events::emit_proposal_executed(&env, proposal_id, &gov_addr);
     }
 
+    /// Estimate the resource cost for executing a proposal.
+    ///
+    /// Soroban's authoritative fee comes from RPC transaction simulation. This
+    /// view returns a deterministic contract-side estimate based on the number
+    /// of actions and calldata size so clients can show a stable cost hint
+    /// before submitting the execution transaction.
+    pub fn estimate_execution_gas(env: Env, proposal_id: u64) -> ExecutionGasEstimate {
+        let state = Self::state(env.clone(), proposal_id);
+        if state == ProposalState::Executed
+            || state == ProposalState::Cancelled
+            || state == ProposalState::Expired
+        {
+            env.panic_with_error(GovernorError::InvalidGasEstimationState);
+        }
+
+        let proposal: Proposal = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Proposal(proposal_id))
+            .expect("proposal not found");
+
+        let action_count = proposal.targets.len();
+        let mut calldata_bytes = 0u32;
+        for i in 0..proposal.calldatas.len() {
+            let calldata = proposal.calldatas.get(i).unwrap();
+            calldata_bytes = calldata_bytes.saturating_add(calldata.len());
+        }
+
+        let estimated_cpu_insns = EXECUTION_BASE_CPU_INSNS
+            .saturating_add((action_count as u64).saturating_mul(EXECUTION_CPU_INSNS_PER_ACTION))
+            .saturating_add(
+                (calldata_bytes as u64).saturating_mul(EXECUTION_CPU_INSNS_PER_CALLDATA_BYTE),
+            );
+        let estimated_mem_bytes = EXECUTION_BASE_MEM_BYTES
+            .saturating_add((action_count as u64).saturating_mul(EXECUTION_MEM_BYTES_PER_ACTION))
+            .saturating_add(
+                (calldata_bytes as u64).saturating_mul(EXECUTION_MEM_BYTES_PER_CALLDATA_BYTE),
+            );
+        let estimated_fee_stroops = EXECUTION_BASE_FEE_STROOPS
+            .saturating_add(
+                (action_count as i128).saturating_mul(EXECUTION_FEE_STROOPS_PER_ACTION),
+            )
+            .saturating_add(
+                (calldata_bytes as i128).saturating_mul(EXECUTION_FEE_STROOPS_PER_CALLDATA_BYTE),
+            );
+
+        ExecutionGasEstimate {
+            proposal_id,
+            action_count,
+            calldata_bytes,
+            estimated_cpu_insns,
+            estimated_mem_bytes,
+            estimated_fee_stroops,
+        }
+    }
+
     /// Cancel a proposal with proper authorization.
     /// Proposer can cancel their own proposal while it is Pending.
     /// Guardian can cancel any Active proposal as an emergency veto.
@@ -1226,6 +1319,7 @@ impl GovernorContract {
     /// This means the call must originate from an executed on-chain proposal.
     pub fn update_config(env: Env, new_settings: GovernorSettings) {
         env.current_contract_address().require_auth();
+        Self::validate_settings(&env, &new_settings);
 
         let old_settings = Self::get_settings(env.clone());
 

@@ -102,6 +102,8 @@ export interface ProposalSimulationResult {
   computeUnits?: number;
   stateChanges?: any[];
   error?: string;
+}
+
 export interface GovernorSettings {
   votingDelay: number;
   votingPeriod: number;
@@ -110,6 +112,29 @@ export interface GovernorSettings {
   guardian: string;
   voteType: VoteType;
   proposalGracePeriod: number;
+  useDynamicQuorum?: boolean;
+  reflectorOracle?: string | null;
+  minQuorumUsd?: bigint;
+  maxCalldataSize?: number;
+  proposalCooldown?: number;
+  maxProposalsPerPeriod?: number;
+  proposalPeriodDuration?: number;
+}
+
+export interface GovernorSettingsValidationLimits {
+  maxVotingDelay?: number;
+  minVotingPeriod?: number;
+}
+
+export interface ExecutionGasEstimate {
+  proposalId: bigint;
+  actionCount: number;
+  calldataBytes: number;
+  estimatedCpuInsns: bigint;
+  estimatedMemBytes: bigint;
+  estimatedFeeStroops: bigint;
+  rpcCpuInsns?: bigint;
+  rpcMemBytes?: bigint;
 }
 
 export interface DelegateInfo {
