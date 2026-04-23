@@ -153,6 +153,71 @@ export class TreasuryClient {
     return Buffer.from(bytes).toString("hex");
   }
 
+  /**
+   * Submit a proposal for approval with spending limit enforcement.
+   *
+   * Validates the proposed transfer amount against per-transfer and daily
+   * spending limits before allowing the proposal to be created. If either
+   * limit is exceeded on-chain, the transaction is rejected with the
+   * corresponding error variant.
+   *
+   * The daily limit operates on a rolling 24-hour window using Unix timestamps.
+   * If the window has elapsed since the last submission, the daily accumulator
+   * automatically resets.
+   *
+   * @param signer        - Keypair authorising the proposal (must be an owner)
+   * @param target        - Contract address to call when the proposal is executed
+   * @param calldata      - Encoded function call to invoke on the target
+   * @param amount        - Transfer amount to validate against spending limits
+   * @returns The proposal ID on success
+   *
+   * @throws TreasuryError with code `SingleTransferExceeded` if amount exceeds max allowed per transfer
+   * @throws TreasuryError with code `DailyLimitExceeded` if accumulated amount exceeds daily limit
+   */
+  async submitWithLimit(
+    signer: Keypair,
+    target: string,
+    calldata: Buffer | Uint8Array,
+    amount: bigint
+  ): Promise<bigint> {
+    const account = await this.server.getAccount(signer.publicKey());
+
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(
+        this.contract.call(
+          "submit_with_limit",
+          nativeToScVal(signer.publicKey(), { type: "address" }),
+          nativeToScVal(target, { type: "address" }),
+          nativeToScVal(calldata, { type: "bytes" }),
+          nativeToScVal(amount, { type: "i128" })
+        )
+      )
+      .setTimeout(30)
+      .build();
+
+    const prepared = await this.server.prepareTransaction(tx);
+    prepared.sign(signer);
+
+    const result = await this.server.sendTransaction(prepared);
+    if (result.status === "ERROR") {
+      throw parseTreasuryError(result);
+    }
+
+    const confirmed = await this.pollForConfirmation(result.hash);
+    const returnVal = confirmed.returnValue;
+    if (!returnVal) {
+      throw new TreasuryError(
+        TreasuryErrorCode.MissingReturnValue,
+        "No return value from submit_with_limit"
+      );
+    }
+
+    return scValToNative(returnVal) as bigint;
+  }
+
   // --- Internal ---
 
   private async pollForConfirmation(

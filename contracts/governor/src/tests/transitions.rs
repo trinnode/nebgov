@@ -329,3 +329,55 @@ fn test_execute_fails_before_timelock_delay() {
     // Current time is still 0 (default). ready_at will be 3600.
     client.execute(&proposal_id);
 }
+
+#[test]
+fn test_execute_batch_executes_all_in_order() {
+    let (env, client, admin, proposer, voter) = setup();
+
+    let timelock_id = env.register(sorogov_timelock::TimelockContract, ());
+    let timelock_client = sorogov_timelock::TimelockContractClient::new(&env, &timelock_id);
+    timelock_client.initialize(&admin, &client.address, &0);
+
+    let votes_token = Address::generate(&env);
+    client.initialize(&admin, &votes_token, &timelock_id, &10, &100, &0, &0);
+
+    let dummy_id = env.register(LocalDummyContract, ());
+    let fn_name = Symbol::new(&env, "noop");
+    let description_1 = String::from_str(&env, "batch-1");
+    let description_2 = String::from_str(&env, "batch-2");
+
+    let proposal_1 = client.propose(
+        &proposer,
+        &description_1,
+        &dummy_id,
+        &fn_name,
+        &Bytes::new(&env),
+    );
+    let proposal_2 = client.propose(
+        &proposer,
+        &description_2,
+        &dummy_id,
+        &fn_name,
+        &Bytes::from_array(&env, &[7u8]),
+    );
+
+    env.ledger().set_sequence_number(10);
+    client.cast_vote(&voter, &proposal_1, &VoteSupport::For);
+    let voter_2 = Address::generate(&env);
+    client.cast_vote(&voter_2, &proposal_2, &VoteSupport::For);
+
+    env.ledger().set_sequence_number(111);
+    assert_eq!(client.state(&proposal_1), ProposalState::Succeeded);
+    assert_eq!(client.state(&proposal_2), ProposalState::Succeeded);
+
+    client.queue(&proposal_1);
+    client.queue(&proposal_2);
+
+    let mut batch = Vec::new(&env);
+    batch.push_back(proposal_1);
+    batch.push_back(proposal_2);
+
+    client.execute_batch(&batch);
+    assert_eq!(client.state(&proposal_1), ProposalState::Executed);
+    assert_eq!(client.state(&proposal_2), ProposalState::Executed);
+}

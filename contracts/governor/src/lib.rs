@@ -897,65 +897,32 @@ impl GovernorContract {
         events::emit_proposal_executed(&env, proposal_id, &gov_addr);
     }
 
-    /// Estimate the resource cost for executing a proposal.
+    /// Execute multiple queued proposals in order.
     ///
-    /// Soroban's authoritative fee comes from RPC transaction simulation. This
-    /// view returns a deterministic contract-side estimate based on the number
-    /// of actions and calldata size so clients can show a stable cost hint
-    /// before submitting the execution transaction.
-    pub fn estimate_execution_gas(env: Env, proposal_id: u64) -> ExecutionGasEstimate {
-        let state = Self::state(env.clone(), proposal_id);
-        if state == ProposalState::Executed
-            || state == ProposalState::Cancelled
-            || state == ProposalState::Expired
-        {
-            env.panic_with_error(GovernorError::InvalidGasEstimationState);
+    /// Performs a full queued-state preflight for every proposal before
+    /// executing any of them, avoiding partial completion in malformed batches.
+    pub fn execute_batch(env: Env, proposal_ids: Vec<u64>) {
+        assert!(!proposal_ids.is_empty(), "empty batch");
+
+        for i in 0..proposal_ids.len() {
+            let proposal_id = proposal_ids.get(i).expect("proposal missing");
+            assert!(
+                Self::state(env.clone(), proposal_id) == ProposalState::Queued,
+                "proposal not queued"
+            );
         }
 
-        let proposal: Proposal = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Proposal(proposal_id))
-            .expect("proposal not found");
-
-        let action_count = proposal.targets.len();
-        let mut calldata_bytes = 0u32;
-        for i in 0..proposal.calldatas.len() {
-            let calldata = proposal.calldatas.get(i).unwrap();
-            calldata_bytes = calldata_bytes.saturating_add(calldata.len());
+        for i in 0..proposal_ids.len() {
+            let proposal_id = proposal_ids.get(i).expect("proposal missing");
+            Self::execute(env.clone(), proposal_id);
         }
 
-        let estimated_cpu_insns = EXECUTION_BASE_CPU_INSNS
-            .saturating_add((action_count as u64).saturating_mul(EXECUTION_CPU_INSNS_PER_ACTION))
-            .saturating_add(
-                (calldata_bytes as u64).saturating_mul(EXECUTION_CPU_INSNS_PER_CALLDATA_BYTE),
-            );
-        let estimated_mem_bytes = EXECUTION_BASE_MEM_BYTES
-            .saturating_add((action_count as u64).saturating_mul(EXECUTION_MEM_BYTES_PER_ACTION))
-            .saturating_add(
-                (calldata_bytes as u64).saturating_mul(EXECUTION_MEM_BYTES_PER_CALLDATA_BYTE),
-            );
-        let estimated_fee_stroops = EXECUTION_BASE_FEE_STROOPS
-            .saturating_add(
-                (action_count as i128).saturating_mul(EXECUTION_FEE_STROOPS_PER_ACTION),
-            )
-            .saturating_add(
-                (calldata_bytes as i128).saturating_mul(EXECUTION_FEE_STROOPS_PER_CALLDATA_BYTE),
-            );
-
-        ExecutionGasEstimate {
-            proposal_id,
-            action_count,
-            calldata_bytes,
-            estimated_cpu_insns,
-            estimated_mem_bytes,
-            estimated_fee_stroops,
-        }
+        env.events()
+            .publish((symbol_short!("exbatch"),), proposal_ids);
     }
 
-    /// Cancel a proposal with proper authorization.
-    /// Proposer can cancel their own proposal while it is Pending.
-    /// Guardian can cancel any Active proposal as an emergency veto.
+    /// Cancel a proposal. Only proposer or admin can cancel.
+    /// TODO issue #7: enforce cancellation rules, emit event.
     pub fn cancel(env: Env, caller: Address, proposal_id: u64) {
         caller.require_auth();
 

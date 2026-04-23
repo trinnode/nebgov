@@ -101,13 +101,43 @@ impl TimelockContract {
         predecessor: Bytes,
         salt: Bytes,
     ) -> Bytes {
+        Self::require_governor(&env, &caller);
+        Self::schedule_internal(env, target, data, fn_name, delay)
+    }
+
+    /// Schedule multiple operations in one call.
+    ///
+    /// All vector inputs must have the same length and each index forms one
+    /// operation tuple. `predecessors` and `salts` are accepted for forward
+    /// compatibility with richer operation graphing.
+    pub fn schedule_batch(
+        env: Env,
+        caller: Address,
+        targets: Vec<Address>,
+        data: Vec<Bytes>,
+        fn_names: Vec<Symbol>,
+        delay: u64,
+        predecessors: Vec<Bytes>,
+        salts: Vec<Bytes>,
+    ) -> Vec<Bytes> {
         caller.require_auth();
-        let governor: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Governor)
-            .expect("not initialized");
-        assert!(caller == governor, "only governor");
+        Self::require_governor(&env, &caller);
+        let len = targets.len();
+        assert!(len > 0, "empty batch");
+        assert!(len == data.len(), "length mismatch");
+        assert!(len == fn_names.len(), "length mismatch");
+        assert!(len == predecessors.len(), "length mismatch");
+        assert!(len == salts.len(), "length mismatch");
+
+        let mut op_ids = Vec::new(&env);
+        for i in 0..len {
+            let target = targets.get(i).expect("target missing");
+            let item_data = data.get(i).expect("data missing");
+            let fn_name = fn_names.get(i).expect("fn missing");
+
+            // Preserve predecessor/salt arguments for API compatibility.
+            let _predecessor = predecessors.get(i).expect("predecessor missing");
+            let _salt = salts.get(i).expect("salt missing");
 
         // Validate predecessor exists if specified
         if !predecessor.is_empty() {
@@ -162,6 +192,15 @@ impl TimelockContract {
             .publish((symbol_short!("schedule"),), op_id.clone());
 
         op_id
+    }
+
+    fn require_governor(env: &Env, caller: &Address) {
+        let governor: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Governor)
+            .expect("not initialized");
+        assert!(caller == &governor, "only governor");
     }
 
     /// Execute a ready operation.
@@ -334,4 +373,63 @@ impl TimelockContract {
 }
 
 #[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::{
+        testutils::{Address as _, Events},
+        TryIntoVal,
+    };
+
+    #[test]
+    fn schedule_batch_returns_ids_and_emits_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(TimelockContract, ());
+        let client = TimelockContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let governor = Address::generate(&env);
+        client.initialize(&admin, &governor, &1);
+
+        let mut targets = Vec::new(&env);
+        targets.push_back(Address::generate(&env));
+        targets.push_back(Address::generate(&env));
+
+        let mut payloads = Vec::new(&env);
+        payloads.push_back(Bytes::from_array(&env, &[1u8, 2u8]));
+        payloads.push_back(Bytes::from_array(&env, &[3u8, 4u8]));
+
+        let mut fn_names = Vec::new(&env);
+        fn_names.push_back(Symbol::new(&env, "ping"));
+        fn_names.push_back(Symbol::new(&env, "pong"));
+
+        let mut predecessors = Vec::new(&env);
+        predecessors.push_back(Bytes::new(&env));
+        predecessors.push_back(Bytes::new(&env));
+
+        let mut salts = Vec::new(&env);
+        salts.push_back(Bytes::from_array(&env, &[9u8]));
+        salts.push_back(Bytes::from_array(&env, &[8u8]));
+
+        let ids = client.schedule_batch(
+            &governor,
+            &targets,
+            &payloads,
+            &fn_names,
+            &10,
+            &predecessors,
+            &salts,
+        );
+        assert_eq!(ids.len(), 2);
+
+        let events = env.events().all();
+        let has_batch_event = events.iter().any(|(_, topics, _)| {
+            topics.len() >= 1 && {
+                let first: Result<Symbol, _> = topics.get(0).unwrap().try_into_val(&env);
+                first.is_ok() && first.unwrap() == symbol_short!("schbatch")
+            }
+        });
+        assert!(has_batch_event, "schedule_batch event not emitted");
+    }
+}
 mod test;

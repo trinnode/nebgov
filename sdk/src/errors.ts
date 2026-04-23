@@ -266,6 +266,10 @@ export function parseTimelockError(
  * Codes 1–99 mirror on-chain contract error values; SDK-level codes start at 100.
  */
 export enum TreasuryErrorCode {
+  // On-chain contract errors (match contracts/treasury/src/lib.rs)
+  SingleTransferExceeded = 1,
+  DailyLimitExceeded     = 2,
+
   // SDK-level codes
   SimulationFailed   = 100,
   TransactionFailed  = 101,
@@ -275,6 +279,8 @@ export enum TreasuryErrorCode {
 }
 
 const TREASURY_MESSAGES: Record<TreasuryErrorCode, string> = {
+  [TreasuryErrorCode.SingleTransferExceeded]: "Proposed transfer exceeds maximum allowed per single transfer",
+  [TreasuryErrorCode.DailyLimitExceeded]:     "Proposed transfer would exceed daily spending limit",
   [TreasuryErrorCode.SimulationFailed]:   "Simulation failed",
   [TreasuryErrorCode.TransactionFailed]:  "Transaction failed",
   [TreasuryErrorCode.TransactionTimeout]: "Transaction timed out",
