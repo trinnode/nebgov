@@ -1,0 +1,85 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-nebgov}
+      POSTGRES_USER: ${POSTGRES_USER:-nebgov}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nebgov}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - nebgov_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  indexer:
+    build:
+      context: packages/indexer
+      dockerfile: Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-nebgov}:${POSTGRES_PASSWORD:-nebgov}@db:5432/${POSTGRES_DB:-nebgov}
+      STELLAR_RPC_URL: ${STELLAR_RPC_URL:-https://soroban-testnet.stellar.org}
+      GOVERNOR_ADDRESS: ${GOVERNOR_ADDRESS:-}
+      POLL_INTERVAL_MS: ${POLL_INTERVAL_MS:-5000}
+      PORT: 3002
+    ports:
+      - "${INDEXER_PORT:-3002}:3002"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3002/health >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    build:
+      context: backend
+      dockerfile: Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-nebgov}:${POSTGRES_PASSWORD:-nebgov}@db:5432/${POSTGRES_DB:-nebgov}
+      JWT_SECRET: ${JWT_SECRET:-dev-secret}
+      PORT: 3001
+    ports:
+      - "${BACKEND_PORT:-3001}:3001"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3001/health >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  app:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    depends_on:
+      indexer:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    environment:
+      NEXT_PUBLIC_GOVERNOR_ADDRESS: ${GOVERNOR_ADDRESS:-}
+      NEXT_PUBLIC_NETWORK: ${NEXT_PUBLIC_NETWORK:-testnet}
+      NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL:-http://localhost:3001}
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  nebgov_postgres_data:
+
