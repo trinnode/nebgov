@@ -18,6 +18,8 @@ import {
   ReferenceLine
 } from "recharts";
 
+import { useTheme } from "../../../hooks/useTheme";
+
 interface Props {
   params: { id: string };
 }
@@ -58,6 +60,8 @@ export default function ProposalDetailPage({ params }: Props) {
   const [votedSupport, setVotedSupport] = useState<VoteSupport | null>(null);
 
   const { publicKey, isConnected, signTransaction } = useWallet();
+  const { theme } = useTheme();
+  const isDark = theme === "dark";
 
   const config = useMemo(() => {
     const governorAddress = process.env.NEXT_PUBLIC_GOVERNOR_ADDRESS;
@@ -151,7 +155,7 @@ export default function ProposalDetailPage({ params }: Props) {
   const COLORS: Record<string, string> = {
     For: "#10b981",    // green-500
     Against: "#f43f5e", // rose-500
-    Abstain: "#94a3b8", // slate-400
+    Abstain: isDark ? "#475569" : "#94a3b8", // slate-600 : slate-400
   };
 
   const totalVotes = proposal.votesFor + proposal.votesAgainst + proposal.votesAbstain;
@@ -215,7 +219,7 @@ export default function ProposalDetailPage({ params }: Props) {
         </div>
       </div>
 
-      <h1 className="text-2xl font-bold text-gray-900 mb-2">
+      <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
         {proposal.description}
       </h1>
 
@@ -265,9 +269,9 @@ export default function ProposalDetailPage({ params }: Props) {
       )}
 
       {/* Metadata / Description Section */}
-      <div className="bg-white border border-gray-200 rounded-xl p-6 mb-6">
+      <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6 mb-6">
         <div className="flex justify-between items-center mb-4">
-          <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide">
+          <h2 className="text-sm font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide">
             Description
           </h2>
           {proposal.metadataUri && (
@@ -289,7 +293,7 @@ export default function ProposalDetailPage({ params }: Props) {
             <Loader2 className="w-4 h-4 animate-spin" /> Fetching off-chain content...
           </div>
         ) : metadata ? (
-          <div className="prose prose-sm max-w-none text-gray-800 whitespace-pre-wrap">
+          <div className="prose prose-sm max-w-none text-gray-800 dark:text-gray-200 whitespace-pre-wrap">
             {metadata}
           </div>
         ) : (
@@ -300,14 +304,14 @@ export default function ProposalDetailPage({ params }: Props) {
       </div>
 
       {/* Delegation */}
-      <div className="bg-white border border-gray-200 rounded-xl p-6 mb-6">
+      <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6 mb-6">
         <div className="flex items-center justify-between gap-4">
           <div>
-            <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-1">
+            <h2 className="text-sm font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide mb-1">
               Your Voting Power
             </h2>
             <div className="flex items-center gap-2">
-              <span className="text-2xl font-bold text-gray-900 font-mono">
+              <span className="text-2xl font-bold text-gray-900 dark:text-white font-mono">
                 {delegationLoading ? "..." : (Number(votingPower) / 10 ** 7).toLocaleString()}
               </span>
               <span className="text-sm text-gray-400">NEB</span>
@@ -323,8 +327,8 @@ export default function ProposalDetailPage({ params }: Props) {
       </div>
 
       {/* Vote bars */}
-      <div className="bg-white border border-gray-200 rounded-xl p-6 mb-6 space-y-4">
-        <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide">
+      <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6 mb-6 space-y-4">
+        <h2 className="text-sm font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide">
           Current Votes
         </h2>
 
@@ -341,11 +345,18 @@ export default function ProposalDetailPage({ params }: Props) {
                 dataKey="name"
                 axisLine={false}
                 tickLine={false}
-                tick={{ fontSize: 12, fontWeight: 500 }}
+                tick={{ fontSize: 12, fontWeight: 500, fill: isDark ? '#94a3b8' : '#64748b' }}
               />
-              <Tooltip
-                cursor={{ fill: 'transparent' }}
-                contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
+               <Tooltip
+                cursor={{ fill: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.02)' }}
+                contentStyle={{ 
+                  borderRadius: '12px', 
+                  border: 'none', 
+                  boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)',
+                  backgroundColor: isDark ? '#1f2937' : '#ffffff',
+                  color: isDark ? '#f3f4f6' : '#111827'
+                }}
+                itemStyle={{ color: isDark ? '#f3f4f6' : '#111827' }}
               />
               <Bar
                 dataKey="votes"
@@ -369,26 +380,26 @@ export default function ProposalDetailPage({ params }: Props) {
           </ResponsiveContainer>
         </div>
 
-        <div className="grid grid-cols-3 gap-4 border-t border-gray-100 pt-6">
+        <div className="grid grid-cols-3 gap-4 border-t border-gray-100 dark:border-gray-700 pt-6">
           <div>
-            <p className="text-xs text-gray-400 font-medium mb-1">FOR</p>
+            <p className="text-xs text-gray-400 font-medium mb-1 uppercase">For</p>
             <p className="font-mono text-lg font-bold text-emerald-600">{(Number(proposal.votesFor) / 10 ** 7).toLocaleString()}</p>
           </div>
           <div>
-            <p className="text-xs text-gray-400 font-medium mb-1">AGAINST</p>
+            <p className="text-xs text-gray-400 font-medium mb-1 uppercase">Against</p>
             <p className="font-mono text-lg font-bold text-rose-600">{(Number(proposal.votesAgainst) / 10 ** 7).toLocaleString()}</p>
           </div>
           <div>
-            <p className="text-xs text-gray-400 font-medium mb-1">ABSTAIN</p>
-            <p className="font-mono text-lg font-bold text-slate-500">{(Number(proposal.votesAbstain) / 10 ** 7).toLocaleString()}</p>
+            <p className="text-xs text-gray-400 font-medium mb-1 uppercase">Abstain</p>
+            <p className="font-mono text-lg font-bold text-slate-500 dark:text-slate-400">{(Number(proposal.votesAbstain) / 10 ** 7).toLocaleString()}</p>
           </div>
         </div>
       </div>
 
       {/* Voting UI */}
       {proposal.state === ProposalState.Active && !voted && (
-        <div className="bg-white border border-gray-200 rounded-xl p-6">
-          <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-4">
+        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6">
+          <h2 className="text-sm font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide mb-4">
             Cast Your Vote
           </h2>
 
@@ -417,8 +428,8 @@ export default function ProposalDetailPage({ params }: Props) {
                     aria-label={aria}
                     className={`flex-1 py-3 rounded-lg border-2 font-medium transition-all
                       ${selectedSupport === value
-                        ? "border-indigo-600 bg-indigo-50 text-indigo-700"
-                        : "border-gray-100 hover:border-gray-200 text-gray-600"}
+                        ? "border-indigo-600 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300"
+                        : "border-gray-100 dark:border-gray-700 hover:border-gray-200 dark:hover:border-gray-600 text-gray-600 dark:text-gray-400"}
                       ${isVoting ? "opacity-50 cursor-not-allowed" : ""}`}
                   >
                     {label}

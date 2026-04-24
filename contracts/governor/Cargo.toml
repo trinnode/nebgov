@@ -16,3 +16,5 @@ sorogov-timelock = { path = "../timelock" }
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
 sorogov-token-votes = { path = "../token-votes", features = ["testutils"] }
+sorogov-token-votes-wrapper = { path = "../token-votes-wrapper", features = ["testutils"] }
+sorogov-governor-factory = { path = "../governor-factory", features = ["testutils"] }

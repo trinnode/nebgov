@@ -106,7 +106,7 @@ Token holders
 This means the authorised principal must be the governor contract itself — the
 only way to satisfy this in production is through the Timelock's cross-contract
 call during proposal execution. Direct calls from any external account, including
-the stored admin, are rejected.
+the stored admin, are rejected. This flow is verified in `contracts/governor/src/tests/upgrade.rs`.
 
 ### Storage Migration
 

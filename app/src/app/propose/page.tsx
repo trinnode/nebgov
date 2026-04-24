@@ -389,8 +389,8 @@ export default function ProposePage() {
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-8">
-      <h1 className="text-3xl font-bold text-gray-900 mb-2">New proposal</h1>
-      <p className="text-gray-500 mb-8">
+      <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">New proposal</h1>
+      <p className="text-gray-500 dark:text-gray-400 mb-8">
         Step-by-step flow with validation, previews, and on-chain simulation.
       </p>
 
@@ -401,13 +401,13 @@ export default function ProposePage() {
             <span
               className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full font-semibold ${step >= s.id
                   ? "bg-indigo-600 text-white"
-                  : "bg-gray-200 text-gray-500"
+                  : "bg-gray-200 dark:bg-gray-700 text-gray-500 dark:text-gray-400"
                 }`}
             >
               {s.id}
             </span>
             <span
-              className={`truncate hidden sm:inline ${step === s.id ? "font-semibold text-gray-900" : "text-gray-500"
+              className={`truncate hidden sm:inline ${step === s.id ? "font-semibold text-gray-900 dark:text-white" : "text-gray-500 dark:text-gray-400"
                 }`}
             >
               {s.label}
@@ -422,7 +422,7 @@ export default function ProposePage() {
       {step === 1 && (
         <div className="space-y-6">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
               Title ({TITLE_MIN}–{TITLE_MAX} characters)
             </label>
             <input
@@ -431,7 +431,7 @@ export default function ProposePage() {
               onChange={(e) =>
                 setDraft((d) => ({ ...d, title: e.target.value }))
               }
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500"
+              className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
               placeholder="Short, specific title"
               maxLength={TITLE_MAX + 5}
             />
@@ -441,7 +441,7 @@ export default function ProposePage() {
           </div>
           <div className="grid md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                 Description (Markdown, min {DESC_MIN} chars)
               </label>
               <textarea
@@ -450,12 +450,12 @@ export default function ProposePage() {
                   setDraft((d) => ({ ...d, description: e.target.value }))
                 }
                 rows={12}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:ring-2 focus:ring-indigo-500"
+                className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white font-mono focus:ring-2 focus:ring-indigo-500"
                 placeholder="Full proposal narrative: context, options, risks…"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center justify-between">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1 flex items-center justify-between">
                 Preview
                 {isHashing && (
                   <span className="text-[10px] text-indigo-600 flex items-center gap-1">
@@ -463,17 +463,17 @@ export default function ProposePage() {
                   </span>
                 )}
               </label>
-              <div className="min-h-[18rem] border border-gray-200 rounded-lg p-3 bg-gray-50/80 text-sm text-gray-800 overflow-auto prose-p:my-2 prose-ul:my-2 prose-ul:list-disc prose-ul:pl-5 prose-headings:font-semibold prose-a:text-indigo-600">
+              <div className="min-h-[18rem] border border-gray-200 dark:border-gray-700 rounded-lg p-3 bg-gray-50/80 dark:bg-gray-900/50 text-sm text-gray-800 dark:text-gray-200 overflow-auto prose-p:my-2 prose-ul:my-2 prose-ul:list-disc prose-ul:pl-5 prose-headings:font-semibold prose-a:text-indigo-600 dark:prose-invert">
                 {draft.description.trim() ? (
                   <ReactMarkdown>{draft.description}</ReactMarkdown>
                 ) : (
-                  <span className="text-gray-400">Nothing to preview yet.</span>
+                  <span className="text-gray-400 dark:text-gray-500">Nothing to preview yet.</span>
                 )}
               </div>
             </div>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
               Metadata Uri / IPFS Attachment
             </label>
             <input
@@ -483,7 +483,7 @@ export default function ProposePage() {
                 setDraft((d) => ({ ...d, ipfsRef: e.target.value }))
               }
               placeholder="ipfs://… or https://…"
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 font-mono"
+              className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500 font-mono"
             />
             <p className="text-xs text-gray-400 mt-1">
               Points to the full proposal metadata. The description above will be hashed and stored on-chain.
@@ -513,10 +513,10 @@ export default function ProposePage() {
             {draft.actions.map((act, idx) => (
               <li
                 key={act.id}
-                className="border border-gray-200 rounded-xl p-4 bg-white space-y-3"
+                className="border border-gray-200 dark:border-gray-700 rounded-xl p-4 bg-white dark:bg-gray-800 space-y-3"
               >
                 <div className="flex justify-between items-center gap-2">
-                  <span className="text-sm font-semibold text-gray-800">
+                  <span className="text-sm font-semibold text-gray-800 dark:text-gray-200">
                     Action {idx + 1}
                   </span>
                   <div className="flex items-center gap-1">
@@ -728,22 +728,22 @@ export default function ProposePage() {
 
       {step === 3 && (
         <div className="space-y-8">
-          <div className="bg-white border border-gray-200 rounded-xl p-6">
-            <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-4">
+          <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6">
+            <h2 className="text-sm font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide mb-4">
               Review Content
             </h2>
             <div className="space-y-4">
               <div>
-                <p className="text-xs text-gray-400 font-medium uppercase mb-1">Title</p>
-                <p className="text-lg font-bold text-gray-900">{draft.title}</p>
+                <p className="text-xs text-gray-400 dark:text-gray-500 font-medium uppercase mb-1">Title</p>
+                <p className="text-lg font-bold text-gray-900 dark:text-white">{draft.title}</p>
               </div>
               <div>
-                <p className="text-xs text-gray-400 font-medium uppercase mb-1">Description Hash (SHA-256)</p>
-                <p className="text-sm font-mono text-gray-600 bg-gray-50 px-2 py-1 rounded">
+                <p className="text-xs text-gray-400 dark:text-gray-500 font-medium uppercase mb-1">Description Hash (SHA-256)</p>
+                <p className="text-sm font-mono text-gray-600 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 px-2 py-1 rounded">
                   {draft.descriptionHash || "Computing..."}
                 </p>
               </div>
-              <div className="prose prose-sm max-w-none text-gray-800 bg-gray-50 p-4 rounded-xl">
+              <div className="prose prose-sm max-w-none text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-900/50 p-4 rounded-xl dark:prose-invert">
                 <ReactMarkdown>{draft.description}</ReactMarkdown>
               </div>
               {draft.ipfsRef && (
@@ -756,8 +756,8 @@ export default function ProposePage() {
             </div>
           </div>
 
-          <div className="bg-white border border-gray-200 rounded-xl p-6">
-            <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-4">
+          <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6">
+            <h2 className="text-sm font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide mb-4">
               On-chain actions
             </h2>
             {draft.actions.length === 0 ? (
@@ -765,17 +765,17 @@ export default function ProposePage() {
             ) : (
               <ul className="space-y-4">
                 {draft.actions.map((act, i) => (
-                  <li key={i} className="text-sm font-mono bg-gray-50 p-3 rounded-lg border border-gray-100">
-                    <div className="text-indigo-600 mb-1">{act.target}</div>
-                    <div className="text-gray-900">{act.fnName}({act.args.map(a => a.value).join(', ')})</div>
+                  <li key={i} className="text-sm font-mono bg-gray-50 dark:bg-gray-900 p-3 rounded-lg border border-gray-100 dark:border-gray-700">
+                    <div className="text-indigo-600 dark:text-indigo-400 mb-1">{act.target}</div>
+                    <div className="text-gray-900 dark:text-gray-200">{act.fnName}({act.args.map(a => a.value).join(', ')})</div>
                   </li>
                 ))}
               </ul>
             )}
           </div>
 
-          <div className="bg-white border border-gray-200 rounded-xl p-6">
-            <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-6">
+          <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6">
+            <h2 className="text-sm font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide mb-6">
               Submission check
             </h2>
             <div className="space-y-6">
@@ -787,14 +787,14 @@ export default function ProposePage() {
               ) : (
                 <div className="grid grid-cols-2 gap-6">
                   <div>
-                    <p className="text-xs text-gray-400 font-medium uppercase mb-1">Your Votes</p>
-                    <p className="text-xl font-bold text-gray-900">
+                    <p className="text-xs text-gray-400 dark:text-gray-500 font-medium uppercase mb-1">Your Votes</p>
+                    <p className="text-xl font-bold text-gray-900 dark:text-white">
                       {votes === null ? "..." : (Number(votes) / 10 ** 7).toLocaleString()}
                     </p>
                   </div>
                   <div>
-                    <p className="text-xs text-gray-400 font-medium uppercase mb-1">Threshold</p>
-                    <p className="text-xl font-bold text-gray-900">
+                    <p className="text-xs text-gray-400 dark:text-gray-500 font-medium uppercase mb-1">Threshold</p>
+                    <p className="text-xl font-bold text-gray-900 dark:text-white">
                       {threshold === null ? "..." : (Number(threshold) / 10 ** 7).toLocaleString()}
                     </p>
                   </div>
