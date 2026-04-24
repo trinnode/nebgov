@@ -37,6 +37,7 @@ pub enum GovernorError {
     EmptyMetadataUri = 24,
     VotesTokenNotSet = 25,
     PauserNotSet = 26,
+    ArithmeticOverflow = 27,
 }
 
 /// Cross-contract interface for the Timelock contract.
@@ -615,8 +616,7 @@ impl GovernorContract {
     /// Cast a vote on an active proposal.
     ///
     /// Reads the voter's snapshot voting power at `proposal.start_ledger` from
-    /// the token-votes contract via a cross-contract call. Accounts with zero
-    /// voting power are rejected.
+    /// the token-votes contract via a cross-contract call.
     pub fn cast_vote(env: Env, voter: Address, proposal_id: u64, support: VoteSupport) {
         voter.require_auth();
 
@@ -638,7 +638,7 @@ impl GovernorContract {
         // using the active voting strategy (single token or multi-token weighted).
         let raw_weight: i128 = Self::compute_votes(&env, &voter, &proposal.start_ledger);
 
-        if raw_weight <= 0 {
+        if raw_weight < 0 {
             env.panic_with_error(GovernorError::ZeroVotingPower);
         }
 
@@ -704,7 +704,7 @@ impl GovernorContract {
 
         // Look up the voter's snapshot voting power at the proposal's start ledger
         let raw_weight: i128 = Self::compute_votes(&env, &voter, &proposal.start_ledger);
-        if raw_weight <= 0 {
+        if raw_weight < 0 {
             env.panic_with_error(GovernorError::ZeroVotingPower);
         }
 
@@ -1134,12 +1134,6 @@ impl GovernorContract {
             .get(&DataKey::Proposal(proposal_id))
             .unwrap_or_else(|| env.panic_with_error(GovernorError::ProposalNotFound));
 
-        let votes_token_addr: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::VotesToken)
-            .unwrap_or_else(|| env.panic_with_error(GovernorError::VotesTokenNotSet));
-
         let quorum_numerator: u32 = env
             .storage()
             .instance()
@@ -1153,10 +1147,18 @@ impl GovernorContract {
             return 0;
         }
 
-        let votes_client = VotesClient::new(&env, &votes_token_addr);
-        let supply = votes_client.get_past_total_supply(&proposal.start_ledger);
+        let strategy: VotingStrategy = env
+            .storage()
+            .instance()
+            .get(&DataKey::VotingStrategy)
+            .unwrap_or(VotingStrategy::Single);
 
-        let static_quorum = (supply * quorum_numerator as i128) / 100;
+        let supply = Self::compute_quorum_supply(&env, &proposal.start_ledger, &strategy);
+
+        let static_quorum = supply
+            .checked_mul(quorum_numerator as i128)
+            .unwrap_or_else(|| env.panic_with_error(GovernorError::ArithmeticOverflow))
+            / 100;
 
         let use_dynamic: bool = env
             .storage()
@@ -1170,6 +1172,12 @@ impl GovernorContract {
         // Try to fetch token price from Reflector oracle.
         let oracle_opt: Option<Address> = env.storage().instance().get(&DataKey::ReflectorOracle);
         if let Some(oracle_addr) = oracle_opt {
+            let votes_token_addr: Address = env
+                .storage()
+                .instance()
+                .get(&DataKey::VotesToken)
+                .unwrap_or_else(|| env.panic_with_error(GovernorError::VotesTokenNotSet));
+
             let min_quorum_usd: i128 = env
                 .storage()
                 .instance()
@@ -1446,6 +1454,47 @@ impl GovernorContract {
     }
 
     /// Compute snapshot vote weight for `voter` at `ledger` using the active strategy.
+    fn checked_add(env: &Env, lhs: i128, rhs: i128) -> i128 {
+        lhs.checked_add(rhs)
+            .unwrap_or_else(|| env.panic_with_error(GovernorError::ArithmeticOverflow))
+    }
+
+    /// Compute `value * weight_bps / 10000` with overflow checks.
+    fn checked_weight_bps(env: &Env, value: i128, weight_bps: u32) -> i128 {
+        value
+            .checked_mul(weight_bps as i128)
+            .unwrap_or_else(|| env.panic_with_error(GovernorError::ArithmeticOverflow))
+            / 10_000
+    }
+
+    /// Compute weighted total supply for quorum under the active voting strategy.
+    fn compute_quorum_supply(env: &Env, ledger: &u32, strategy: &VotingStrategy) -> i128 {
+        match strategy {
+            VotingStrategy::Single => {
+                let votes_token_addr: Address = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::VotesToken)
+                    .unwrap_or_else(|| env.panic_with_error(GovernorError::VotesTokenNotSet));
+                VotesClient::new(env, &votes_token_addr).get_past_total_supply(ledger)
+            }
+            VotingStrategy::MultiToken(tokens) => {
+                let mut total: i128 = 0;
+                for wt in tokens.iter() {
+                    let supply =
+                        match VotesClient::new(env, &wt.token).try_get_past_total_supply(ledger) {
+                            Ok(Ok(supply)) => supply,
+                            _ => 0,
+                        };
+                    let weighted = Self::checked_weight_bps(env, supply, wt.weight_bps);
+                    total = Self::checked_add(env, total, weighted);
+                }
+                total
+            }
+        }
+    }
+
+    /// Compute snapshot vote weight for `voter` at `ledger` using the active strategy.
     fn compute_votes(env: &Env, voter: &Address, ledger: &u32) -> i128 {
         let strategy: VotingStrategy = env
             .storage()
@@ -1464,8 +1513,13 @@ impl GovernorContract {
             VotingStrategy::MultiToken(tokens) => {
                 let mut total: i128 = 0;
                 for wt in tokens.iter() {
-                    let votes = VotesClient::new(env, &wt.token).get_past_votes(voter, ledger);
-                    total += (votes * wt.weight_bps as i128) / 10_000;
+                    let votes =
+                        match VotesClient::new(env, &wt.token).try_get_past_votes(voter, ledger) {
+                            Ok(Ok(votes)) => votes,
+                            _ => 0,
+                        };
+                    let weighted = Self::checked_weight_bps(env, votes, wt.weight_bps);
+                    total = Self::checked_add(env, total, weighted);
                 }
                 total
             }
@@ -1491,8 +1545,12 @@ impl GovernorContract {
             VotingStrategy::MultiToken(tokens) => {
                 let mut total: i128 = 0;
                 for wt in tokens.iter() {
-                    let votes = VotesClient::new(env, &wt.token).get_votes(proposer);
-                    total += (votes * wt.weight_bps as i128) / 10_000;
+                    let votes = match VotesClient::new(env, &wt.token).try_get_votes(proposer) {
+                        Ok(Ok(votes)) => votes,
+                        _ => 0,
+                    };
+                    let weighted = Self::checked_weight_bps(env, votes, wt.weight_bps);
+                    total = Self::checked_add(env, total, weighted);
                 }
                 total
             }

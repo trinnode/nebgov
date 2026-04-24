@@ -17,10 +17,11 @@
 
 use crate::{
     GovernorContract, GovernorContractClient, Proposal, ProposalState, VoteSupport, VoteType,
+    VotingStrategy, WeightedToken,
 };
 
 use soroban_sdk::{
-    contract, contractimpl,
+    contract, contractimpl, contracttype,
     testutils::{Address as _, Events, Ledger as _},
     token, Address, Bytes, Env, Symbol, TryIntoVal,
 };
@@ -52,6 +53,49 @@ impl MockTarget {
     }
 }
 
+#[contracttype]
+#[derive(Clone)]
+enum ConfigurableVotesDataKey {
+    Votes(Address),
+    TotalSupply,
+}
+
+#[contract]
+pub struct ConfigurableVotesContract;
+
+#[contractimpl]
+impl ConfigurableVotesContract {
+    pub fn set_votes(env: Env, account: Address, votes: i128) {
+        env.storage()
+            .instance()
+            .set(&ConfigurableVotesDataKey::Votes(account), &votes);
+    }
+
+    pub fn set_total_supply(env: Env, supply: i128) {
+        env.storage()
+            .instance()
+            .set(&ConfigurableVotesDataKey::TotalSupply, &supply);
+    }
+
+    pub fn get_votes(env: Env, account: Address) -> i128 {
+        env.storage()
+            .instance()
+            .get(&ConfigurableVotesDataKey::Votes(account))
+            .unwrap_or(0)
+    }
+
+    pub fn get_past_votes(env: Env, account: Address, _ledger: u32) -> i128 {
+        Self::get_votes(env, account)
+    }
+
+    pub fn get_past_total_supply(env: Env, _ledger: u32) -> i128 {
+        env.storage()
+            .instance()
+            .get(&ConfigurableVotesDataKey::TotalSupply)
+            .unwrap_or(0)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // TimelockContract reference — we call the deployed timelock via its generated
 // client, which is available because both crates share the same test binary.
@@ -72,6 +116,51 @@ fn count_topic(env: &Env, topic_name: &str) -> usize {
             }
         })
         .count()
+}
+
+fn make_multi_token_strategy(env: &Env, entries: &[(Address, u32)]) -> VotingStrategy {
+    let mut weighted_tokens = soroban_sdk::Vec::new(env);
+    for (token, weight_bps) in entries.iter() {
+        weighted_tokens.push_back(WeightedToken {
+            token: token.clone(),
+            weight_bps: *weight_bps,
+        });
+    }
+    VotingStrategy::MultiToken(weighted_tokens)
+}
+
+fn propose_exec_gov(
+    env: &Env,
+    governor_client: &GovernorContractClient,
+    proposer: &Address,
+    target: &Address,
+    proposal_seed: &[u8],
+) -> u64 {
+    let description = soroban_sdk::String::from_str(env, "Multi-token integration proposal");
+    let description_hash = env
+        .crypto()
+        .sha256(&Bytes::from_slice(env, proposal_seed))
+        .into();
+    let metadata_uri = soroban_sdk::String::from_str(env, "ipfs://multi-token");
+
+    let mut targets = soroban_sdk::Vec::new(env);
+    targets.push_back(target.clone());
+
+    let mut fn_names = soroban_sdk::Vec::new(env);
+    fn_names.push_back(Symbol::new(env, "exec_gov"));
+
+    let mut calldatas = soroban_sdk::Vec::new(env);
+    calldatas.push_back(Bytes::from_slice(env, proposal_seed));
+
+    governor_client.propose(
+        proposer,
+        &description,
+        &description_hash,
+        &metadata_uri,
+        &targets,
+        &fn_names,
+        &calldatas,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -567,4 +656,323 @@ fn test_cancel_queued_after_window_closes() {
 
     // Try to cancel after veto window closes — should fail
     governor_client.cancel_queued(&guardian, &proposal_id);
+}
+
+#[test]
+fn test_multi_token_weight_arithmetic_zero_balance_and_edge_tokens() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let proposer = Address::generate(&env);
+    let voter = Address::generate(&env);
+    let zero_voter = Address::generate(&env);
+
+    let token_a = env.register(ConfigurableVotesContract, ());
+    let token_b = env.register(ConfigurableVotesContract, ());
+    let token_c = env.register(ConfigurableVotesContract, ());
+    let token_e = env.register(ConfigurableVotesContract, ());
+    let missing_token = Address::generate(&env);
+
+    let token_a_client = ConfigurableVotesContractClient::new(&env, &token_a);
+    let token_b_client = ConfigurableVotesContractClient::new(&env, &token_b);
+    let token_c_client = ConfigurableVotesContractClient::new(&env, &token_c);
+    let token_e_client = ConfigurableVotesContractClient::new(&env, &token_e);
+
+    token_a_client.set_votes(&voter, &100);
+    token_b_client.set_votes(&voter, &40);
+    token_c_client.set_votes(&voter, &0);
+    token_e_client.set_votes(&voter, &10);
+
+    let timelock_id = env.register(TimelockContract, ());
+    let governor_id = env.register(GovernorContract, ());
+    let timelock_client = TimelockContractClient::new(&env, &timelock_id);
+    let governor_client = GovernorContractClient::new(&env, &governor_id);
+
+    timelock_client.initialize(&admin, &governor_id, &0, &1_209_600);
+    governor_client.initialize(
+        &admin,
+        &token_a,
+        &timelock_id,
+        &10,
+        &20,
+        &0,
+        &0,
+        &guardian,
+        &VoteType::Extended,
+        &120_960,
+    );
+
+    let strategy = make_multi_token_strategy(
+        &env,
+        &[
+            (token_a.clone(), 10_000),
+            (token_b.clone(), 15_000),
+            (token_c.clone(), 5_000),
+            (missing_token, 20_000),
+            (token_e.clone(), 2_500),
+        ],
+    );
+    governor_client.set_voting_strategy(&strategy);
+
+    let mock_target_id = env.register(MockTarget, ());
+    let proposal_id = propose_exec_gov(
+        &env,
+        &governor_client,
+        &proposer,
+        &mock_target_id,
+        b"multi-token-weighted",
+    );
+
+    env.ledger().with_mut(|l| l.sequence_number = 11);
+    governor_client.cast_vote(&voter, &proposal_id, &VoteSupport::For);
+
+    let (votes_for, votes_against, votes_abstain) = governor_client.proposal_votes(&proposal_id);
+    // 100*1.0 + 40*1.5 + 0*0.5 + missing*2.0 + 10*0.25 = 100 + 60 + 0 + 0 + 2
+    assert_eq!(votes_for, 162);
+    assert_eq!(votes_against, 0);
+    assert_eq!(votes_abstain, 0);
+
+    governor_client.cast_vote(&zero_voter, &proposal_id, &VoteSupport::Against);
+    let receipt = governor_client.get_receipt(&proposal_id, &zero_voter);
+    assert!(receipt.has_voted);
+    assert_eq!(receipt.weight, 0);
+}
+
+#[test]
+fn test_multi_token_quorum_uses_weighted_total_supply_sum() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let proposer = Address::generate(&env);
+
+    let token_a = env.register(ConfigurableVotesContract, ());
+    let token_b = env.register(ConfigurableVotesContract, ());
+    let token_c = env.register(ConfigurableVotesContract, ());
+
+    let token_a_client = ConfigurableVotesContractClient::new(&env, &token_a);
+    let token_b_client = ConfigurableVotesContractClient::new(&env, &token_b);
+    let token_c_client = ConfigurableVotesContractClient::new(&env, &token_c);
+
+    token_a_client.set_total_supply(&1_000);
+    token_b_client.set_total_supply(&2_000);
+    token_c_client.set_total_supply(&3_000);
+
+    let timelock_id = env.register(TimelockContract, ());
+    let governor_id = env.register(GovernorContract, ());
+    let timelock_client = TimelockContractClient::new(&env, &timelock_id);
+    let governor_client = GovernorContractClient::new(&env, &governor_id);
+    let mock_target_id = env.register(MockTarget, ());
+
+    timelock_client.initialize(&admin, &governor_id, &0, &1_209_600);
+    governor_client.initialize(
+        &admin,
+        &token_a,
+        &timelock_id,
+        &10,
+        &20,
+        &20,
+        &0,
+        &guardian,
+        &VoteType::Extended,
+        &120_960,
+    );
+
+    let strategy = make_multi_token_strategy(
+        &env,
+        &[
+            (token_a.clone(), 10_000),
+            (token_b.clone(), 5_000),
+            (token_c.clone(), 20_000),
+        ],
+    );
+    governor_client.set_voting_strategy(&strategy);
+
+    let proposal_id = propose_exec_gov(
+        &env,
+        &governor_client,
+        &proposer,
+        &mock_target_id,
+        b"multi-token-quorum",
+    );
+
+    assert_eq!(governor_client.quorum(&proposal_id), 1_600);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #27)")]
+fn test_multi_token_overflow_is_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let proposer = Address::generate(&env);
+    let voter = Address::generate(&env);
+
+    let token_a = env.register(ConfigurableVotesContract, ());
+    let token_b = env.register(ConfigurableVotesContract, ());
+    let token_c = env.register(ConfigurableVotesContract, ());
+    let token_d = env.register(ConfigurableVotesContract, ());
+    let token_e = env.register(ConfigurableVotesContract, ());
+
+    for token in [&token_a, &token_b, &token_c, &token_d, &token_e] {
+        let client = ConfigurableVotesContractClient::new(&env, token);
+        client.set_votes(&voter, &i128::MAX);
+    }
+
+    let timelock_id = env.register(TimelockContract, ());
+    let governor_id = env.register(GovernorContract, ());
+    let timelock_client = TimelockContractClient::new(&env, &timelock_id);
+    let governor_client = GovernorContractClient::new(&env, &governor_id);
+    let mock_target_id = env.register(MockTarget, ());
+
+    timelock_client.initialize(&admin, &governor_id, &0, &1_209_600);
+    governor_client.initialize(
+        &admin,
+        &token_a,
+        &timelock_id,
+        &10,
+        &20,
+        &0,
+        &0,
+        &guardian,
+        &VoteType::Extended,
+        &120_960,
+    );
+
+    let strategy = make_multi_token_strategy(
+        &env,
+        &[
+            (token_a.clone(), 20_000),
+            (token_b.clone(), 20_000),
+            (token_c.clone(), 20_000),
+            (token_d.clone(), 20_000),
+            (token_e.clone(), 20_000),
+        ],
+    );
+    governor_client.set_voting_strategy(&strategy);
+
+    let proposal_id = propose_exec_gov(
+        &env,
+        &governor_client,
+        &proposer,
+        &mock_target_id,
+        b"multi-token-overflow",
+    );
+
+    env.ledger().with_mut(|l| l.sequence_number = 11);
+    governor_client.cast_vote(&voter, &proposal_id, &VoteSupport::For);
+}
+
+#[test]
+fn test_multi_token_full_lifecycle_with_three_tokens_and_quorum_gate() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let proposer = Address::generate(&env);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+
+    let token_a = env.register(ConfigurableVotesContract, ());
+    let token_b = env.register(ConfigurableVotesContract, ());
+    let token_c = env.register(ConfigurableVotesContract, ());
+
+    let token_a_client = ConfigurableVotesContractClient::new(&env, &token_a);
+    let token_b_client = ConfigurableVotesContractClient::new(&env, &token_b);
+    let token_c_client = ConfigurableVotesContractClient::new(&env, &token_c);
+
+    token_a_client.set_total_supply(&1_000);
+    token_b_client.set_total_supply(&1_000);
+    token_c_client.set_total_supply(&1_000);
+
+    token_a_client.set_votes(&alice, &300);
+    token_b_client.set_votes(&bob, &200);
+    token_c_client.set_votes(&bob, &200);
+
+    let timelock_id = env.register(TimelockContract, ());
+    let governor_id = env.register(GovernorContract, ());
+    let mock_target_id = env.register(MockTarget, ());
+    let timelock_client = TimelockContractClient::new(&env, &timelock_id);
+    let governor_client = GovernorContractClient::new(&env, &governor_id);
+    let mock_client = MockTargetClient::new(&env, &mock_target_id);
+
+    timelock_client.initialize(&admin, &governor_id, &1, &1_209_600);
+    governor_client.initialize(
+        &admin,
+        &token_a,
+        &timelock_id,
+        &10,
+        &20,
+        &20,
+        &0,
+        &guardian,
+        &VoteType::Extended,
+        &120_960,
+    );
+
+    let strategy = make_multi_token_strategy(
+        &env,
+        &[
+            (token_a.clone(), 10_000),
+            (token_b.clone(), 10_000),
+            (token_c.clone(), 10_000),
+        ],
+    );
+    governor_client.set_voting_strategy(&strategy);
+
+    let proposal_low = propose_exec_gov(
+        &env,
+        &governor_client,
+        &proposer,
+        &mock_target_id,
+        b"multi-token-lifecycle-low",
+    );
+    env.ledger().with_mut(|l| l.sequence_number = 11);
+    governor_client.cast_vote(&alice, &proposal_low, &VoteSupport::For);
+    env.ledger().with_mut(|l| l.sequence_number = 31);
+    assert_eq!(
+        governor_client.state(&proposal_low),
+        ProposalState::Defeated
+    );
+
+    let proposal_pass = propose_exec_gov(
+        &env,
+        &governor_client,
+        &proposer,
+        &mock_target_id,
+        b"multi-token-lifecycle-pass",
+    );
+    env.ledger().with_mut(|l| l.sequence_number = 42);
+    governor_client.cast_vote(&alice, &proposal_pass, &VoteSupport::For);
+    governor_client.cast_vote(&bob, &proposal_pass, &VoteSupport::For);
+
+    let (votes_for, votes_against, votes_abstain) = governor_client.proposal_votes(&proposal_pass);
+    assert_eq!(votes_for, 700);
+    assert_eq!(votes_against, 0);
+    assert_eq!(votes_abstain, 0);
+
+    env.ledger().with_mut(|l| l.sequence_number = 62);
+    assert_eq!(
+        governor_client.state(&proposal_pass),
+        ProposalState::Succeeded
+    );
+
+    let ts_before_queue = env.ledger().timestamp();
+    governor_client.queue(&proposal_pass);
+    assert_eq!(governor_client.state(&proposal_pass), ProposalState::Queued);
+
+    env.ledger().with_mut(|l| l.timestamp = ts_before_queue + 2);
+    governor_client.execute(&proposal_pass);
+
+    assert!(mock_client.was_called());
+    assert_eq!(
+        governor_client.state(&proposal_pass),
+        ProposalState::Executed
+    );
 }
