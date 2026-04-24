@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { useTheme } from "../hooks/useTheme";
 import toast from "react-hot-toast";
+import { loadNotificationHistory } from "../lib/governance-notifications";
 
 const NAV_LINKS = [
   { name: "Proposals", href: "/", icon: LayoutDashboard },
@@ -40,6 +41,7 @@ export function NavBar() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isWalletMenuOpen, setIsWalletMenuOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
+  const [unread, setUnread] = useState(0);
   const drawerRef = useRef<HTMLDivElement>(null);
   const { theme, setTheme } = useTheme();
 
@@ -62,6 +64,16 @@ export function NavBar() {
       document.body.style.overflow = "";
     };
   }, [isMenuOpen]);
+
+  useEffect(() => {
+    const compute = () => {
+      const rows = loadNotificationHistory();
+      setUnread(rows.filter((r) => !r.read).length);
+    };
+    compute();
+    window.addEventListener("nebgov-notify-history", compute);
+    return () => window.removeEventListener("nebgov-notify-history", compute);
+  }, []);
 
   useEffect(() => {
     if (!isWalletMenuOpen) return;
@@ -132,7 +144,14 @@ export function NavBar() {
                       : "text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white hover:bg-gray-50 dark:hover:bg-gray-800"
                   }`}
                 >
-                  {link.name}
+                  <span className="inline-flex items-center gap-2">
+                    {link.name}
+                    {link.href === "/notifications" && unread > 0 && (
+                      <span className="min-w-5 h-5 px-1.5 rounded-full bg-indigo-600 text-white text-[11px] leading-5 text-center">
+                        {unread > 99 ? "99+" : unread}
+                      </span>
+                    )}
+                  </span>
                 </Link>
               );
             })}
@@ -304,7 +323,12 @@ export function NavBar() {
                       className={`w-5 h-5 flex-shrink-0 ${isActive ? "text-indigo-600" : "text-gray-400"}`}
                       aria-hidden
                     />
-                    {link.name}
+                    <span className="flex-1">{link.name}</span>
+                    {link.href === "/notifications" && unread > 0 && (
+                      <span className="min-w-6 h-6 px-2 rounded-full bg-indigo-600 text-white text-xs leading-6 text-center">
+                        {unread > 99 ? "99+" : unread}
+                      </span>
+                    )}
                   </Link>
                 );
               })}

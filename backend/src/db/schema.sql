@@ -59,3 +59,30 @@ CREATE INDEX IF NOT EXISTS idx_leaderboard_history_date ON leaderboard_history(s
 CREATE INDEX IF NOT EXISTS idx_leaderboard_history_user_date ON leaderboard_history(user_id, snapshot_date);
 CREATE INDEX IF NOT EXISTS idx_competitions_active ON competitions(is_active);
 CREATE INDEX IF NOT EXISTS idx_competitions_dates ON competitions(start_date, end_date);
+
+-- Notification preferences (per user)
+CREATE TABLE IF NOT EXISTS notification_preferences (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  created_self BOOLEAN DEFAULT true,
+  active BOOLEAN DEFAULT true,
+  voting_ends_soon BOOLEAN DEFAULT true,
+  outcome BOOLEAN DEFAULT true,
+  queued BOOLEAN DEFAULT true,
+  executed BOOLEAN DEFAULT true
+);
+
+-- Notification history (per user)
+CREATE TABLE IF NOT EXISTS notification_history (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,
+  proposal_id BIGINT,
+  message TEXT,
+  read BOOLEAN DEFAULT false,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_notification_history_user_created_at
+  ON notification_history(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notification_history_user_read
+  ON notification_history(user_id, read);

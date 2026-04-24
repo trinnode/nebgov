@@ -2,3 +2,4 @@ packages:
   - 'sdk'
   - 'app'
   - 'packages/indexer'
+  - 'backend'

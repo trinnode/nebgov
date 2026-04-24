@@ -6,11 +6,14 @@ import {
   DEFAULT_NOTIFICATION_TOGGLES,
   loadNotificationHistory,
   loadNotificationToggles,
+  markAllNotificationsRead,
   saveNotificationToggles,
+  syncNotificationsFromBackend,
   type NotificationHistoryEntry,
   type NotificationToggleKey,
   type NotificationToggles,
 } from "../../lib/governance-notifications";
+import { useWallet } from "../../lib/wallet-context";
 
 const TOGGLE_ROWS: {
   key: NotificationToggleKey;
@@ -58,6 +61,7 @@ function permissionLabel(): string {
 }
 
 export default function NotificationsPage() {
+  const { isConnected } = useWallet();
   const [toggles, setToggles] = useState<NotificationToggles>({
     ...DEFAULT_NOTIFICATION_TOGGLES,
   });
@@ -66,7 +70,11 @@ export default function NotificationsPage() {
   useEffect(() => {
     setToggles(loadNotificationToggles());
     setHistory(loadNotificationHistory());
-  }, []);
+    if (isConnected) {
+      void syncNotificationsFromBackend().catch(() => undefined);
+    }
+    markAllNotificationsRead();
+  }, [isConnected]);
 
   useEffect(() => {
     const onHistory = () => setHistory(loadNotificationHistory());

@@ -3,6 +3,8 @@ import cors from "cors";
 import dotenv from "dotenv";
 import competitionsRouter from "./routes/competitions";
 import leaderboardRouter from "./routes/leaderboard";
+import authRouter from "./routes/auth";
+import notificationsRouter from "./routes/notifications";
 
 dotenv.config();
 
@@ -19,8 +21,10 @@ app.get("/health", (req, res) => {
 });
 
 // Routes
+app.use("/auth", authRouter);
 app.use("/competitions", competitionsRouter);
 app.use("/leaderboard", leaderboardRouter);
+app.use("/notifications", notificationsRouter);
 
 // Error handling
 app.use(

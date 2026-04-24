@@ -2,6 +2,8 @@
  * Browser notification preferences and on-device event history (localStorage).
  */
 
+import { backendFetch, getAuthToken } from "./backend";
+
 export const LS_NOTIFY_TOGGLES = "nebgov-notify-toggles";
 export const LS_NOTIFY_HISTORY = "nebgov-notify-history";
 export const LS_PROPOSAL_META = "nebgov-proposal-meta";
@@ -39,6 +41,7 @@ export type NotificationHistoryEntry = {
   body: string;
   at: number;
   ledger?: number;
+  read?: boolean;
 };
 
 const MAX_HISTORY = 200;
@@ -58,6 +61,16 @@ export function loadNotificationToggles(): NotificationToggles {
 export function saveNotificationToggles(t: NotificationToggles): void {
   localStorage.setItem(LS_NOTIFY_TOGGLES, JSON.stringify(t));
   window.dispatchEvent(new Event("nebgov-notify-toggles"));
+
+  const token = getAuthToken();
+  if (!token) return;
+  void backendFetch<NotificationToggles>("/notifications/preferences", {
+    method: "POST",
+    auth: true,
+    body: JSON.stringify(t),
+  }).catch(() => {
+    /* best-effort */
+  });
 }
 
 export function loadNotificationHistory(): NotificationHistoryEntry[] {
@@ -65,7 +78,8 @@ export function loadNotificationHistory(): NotificationHistoryEntry[] {
   try {
     const raw = localStorage.getItem(LS_NOTIFY_HISTORY);
     if (!raw) return [];
-    return JSON.parse(raw) as NotificationHistoryEntry[];
+    const parsed = JSON.parse(raw) as NotificationHistoryEntry[];
+    return parsed.map((e) => ({ ...e, read: e.read ?? false }));
   } catch {
     return [];
   }
@@ -85,11 +99,92 @@ export function appendNotificationHistory(
     title: entry.title,
     body: entry.body,
     ledger: entry.ledger,
+    read: false,
   };
   const prev = loadNotificationHistory();
   const next = [row, ...prev].slice(0, MAX_HISTORY);
   localStorage.setItem(LS_NOTIFY_HISTORY, JSON.stringify(next));
   window.dispatchEvent(new Event("nebgov-notify-history"));
+
+  const token = getAuthToken();
+  if (!token) return;
+  void backendFetch("/notifications", {
+    method: "POST",
+    auth: true,
+    body: JSON.stringify({
+      type: row.kind,
+      proposal_id: Number.isFinite(Number(row.proposalId))
+        ? Number(row.proposalId)
+        : undefined,
+      message: `${row.title}\n\n${row.body}`,
+    }),
+  }).catch(() => {
+    /* best-effort */
+  });
+}
+
+export function unreadCount(): number {
+  return loadNotificationHistory().filter((e) => !e.read).length;
+}
+
+export async function syncNotificationsFromBackend(): Promise<void> {
+  const token = getAuthToken();
+  if (!token) return;
+
+  const [prefs, history] = await Promise.all([
+    backendFetch<NotificationToggles>("/notifications/preferences", {
+      method: "GET",
+      auth: true,
+    }),
+    backendFetch<{
+      data: {
+        id: number;
+        type: string;
+        proposal_id: number | null;
+        message: string | null;
+        read: boolean;
+        created_at: string;
+      }[];
+    }>("/notifications?limit=200&offset=0", { method: "GET", auth: true }),
+  ]);
+
+  localStorage.setItem(LS_NOTIFY_TOGGLES, JSON.stringify(prefs));
+  window.dispatchEvent(new Event("nebgov-notify-toggles"));
+
+  const mapped: NotificationHistoryEntry[] = history.data.map((r) => {
+    const msg = r.message ?? "";
+    const [title, ...rest] = msg.split("\n\n");
+    return {
+      id: String(r.id),
+      kind: (r.type as NotificationEventKind) ?? "active",
+      proposalId: r.proposal_id != null ? String(r.proposal_id) : "0",
+      title: title || r.type,
+      body: rest.join("\n\n") || "",
+      at: new Date(r.created_at).getTime(),
+      read: r.read,
+    };
+  });
+
+  localStorage.setItem(LS_NOTIFY_HISTORY, JSON.stringify(mapped));
+  window.dispatchEvent(new Event("nebgov-notify-history"));
+}
+
+export function markAllNotificationsRead(): void {
+  const prev = loadNotificationHistory();
+  if (prev.length === 0) return;
+  const next = prev.map((e) => ({ ...e, read: true }));
+  localStorage.setItem(LS_NOTIFY_HISTORY, JSON.stringify(next));
+  window.dispatchEvent(new Event("nebgov-notify-history"));
+
+  const token = getAuthToken();
+  if (!token) return;
+  void backendFetch("/notifications/mark-read", {
+    method: "POST",
+    auth: true,
+    body: JSON.stringify({ all: true }),
+  }).catch(() => {
+    /* best-effort */
+  });
 }
 
 export type ProposalMeta = {

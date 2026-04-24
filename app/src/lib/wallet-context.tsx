@@ -23,6 +23,8 @@ import {
   AlbedoModule,
   type ISupportedWallet,
 } from "@creit.tech/stellar-wallets-kit";
+import { backendFetch, setAuthToken } from "./backend";
+import { syncNotificationsFromBackend } from "./governance-notifications";
 
 function appNetworkPassphrase(): string {
   const n = process.env.NEXT_PUBLIC_NETWORK || "testnet";
@@ -96,6 +98,17 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
             if (typeof window !== "undefined" && "Notification" in window) {
               void Notification.requestPermission();
             }
+
+            try {
+              const login = await backendFetch<{ token: string }>("/auth/login", {
+                method: "POST",
+                body: JSON.stringify({ wallet_address: rawAddress }),
+              });
+              setAuthToken(login.token);
+              await syncNotificationsFromBackend();
+            } catch {
+              // Backend is optional; localStorage notifications still work.
+            }
           } catch (err) {
             const msg =
               err instanceof Error ? err.message : "Failed to get address";
@@ -117,6 +130,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     setAddress(null);
     setPublicKey(null);
     setError(null);
+    setAuthToken(null);
   }, []);
 
   const signTransaction = useCallback(
