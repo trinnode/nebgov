@@ -87,23 +87,93 @@ export function createApp(): express.Application {
     const key = `profile:${address}`;
     try {
       const data = await cached(key, TTL.profile, async () => {
-        const [proposalsRes, votesRes, delegationsRes] = await Promise.all([
+        const [
+          proposalsRes,
+          votesRes,
+          delegationsRes,
+          wrapperDepositsRes,
+          wrapperWithdrawalsRes,
+        ] = await Promise.all([
           pool.query("SELECT COUNT(*) FROM proposals WHERE proposer = $1", [address]),
           pool.query("SELECT COUNT(*), SUM(weight) FROM votes WHERE voter = $1", [address]),
           pool.query(
             "SELECT new_delegatee FROM delegates WHERE delegator = $1 ORDER BY ledger DESC LIMIT 1",
             [address]
           ),
+          pool.query("SELECT COALESCE(SUM(amount), 0) AS sum FROM wrapper_deposits WHERE account = $1", [address]),
+          pool.query("SELECT COALESCE(SUM(amount), 0) AS sum FROM wrapper_withdrawals WHERE account = $1", [address]),
         ]);
+
+        const depositTotal = BigInt(wrapperDepositsRes.rows[0]?.sum ?? 0);
+        const withdrawalTotal = BigInt(wrapperWithdrawalsRes.rows[0]?.sum ?? 0);
+        const wrappedBalance = depositTotal - withdrawalTotal;
+
         return {
           address,
           proposalsCreated: Number(proposalsRes.rows[0].count),
           votescast: Number(votesRes.rows[0].count),
           totalVotingPowerUsed: String(votesRes.rows[0].sum ?? 0),
           currentDelegatee: delegationsRes.rows[0]?.new_delegatee ?? address,
+          wrapper: {
+            depositTotal: depositTotal.toString(),
+            withdrawalTotal: withdrawalTotal.toString(),
+            wrappedBalance: wrappedBalance.toString(),
+          },
         };
       });
       res.json(data);
+    } catch {
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // GET /wrapper/deposits?account=G...&limit&offset
+  app.get("/wrapper/deposits", async (req: Request, res: Response): Promise<void> => {
+    const account = typeof req.query.account === "string" ? req.query.account : undefined;
+    const limit = Math.min(Number(req.query.limit ?? 50), 200);
+    const offset = Number(req.query.offset ?? 0);
+    try {
+      const params: any[] = [];
+      let where = "";
+      if (account) {
+        where = "WHERE account = $1";
+        params.push(account);
+      }
+      params.push(limit, offset);
+      const limitIdx = params.length - 1;
+      const offsetIdx = params.length;
+
+      const result = await pool.query(
+        `SELECT * FROM wrapper_deposits ${where} ORDER BY ledger DESC, id DESC LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+        params
+      );
+      res.json({ data: result.rows, pagination: { limit, offset, hasMore: result.rows.length === limit } });
+    } catch {
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // GET /wrapper/withdrawals?account=G...&limit&offset
+  app.get("/wrapper/withdrawals", async (req: Request, res: Response): Promise<void> => {
+    const account = typeof req.query.account === "string" ? req.query.account : undefined;
+    const limit = Math.min(Number(req.query.limit ?? 50), 200);
+    const offset = Number(req.query.offset ?? 0);
+    try {
+      const params: any[] = [];
+      let where = "";
+      if (account) {
+        where = "WHERE account = $1";
+        params.push(account);
+      }
+      params.push(limit, offset);
+      const limitIdx = params.length - 1;
+      const offsetIdx = params.length;
+
+      const result = await pool.query(
+        `SELECT * FROM wrapper_withdrawals ${where} ORDER BY ledger DESC, id DESC LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+        params
+      );
+      res.json({ data: result.rows, pagination: { limit, offset, hasMore: result.rows.length === limit } });
     } catch {
       res.status(500).json({ error: "Internal server error" });
     }

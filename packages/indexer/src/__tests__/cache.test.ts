@@ -60,6 +60,6 @@ describe("invalidatePattern()", () => {
     await cached("proposals:0:20", 5000, fn);
     await cached("proposals:20:20", 5000, fn);
     await cached("delegates:10", 5000, fn); // should still be cached
-    expect(fn).toHaveBeenCalledTimes(4); // 3 initial + 2 re-fetched proposals, delegates still cached
+    expect(fn).toHaveBeenCalledTimes(5); // 3 initial + 2 re-fetched proposals, delegates still cached
   });
 });

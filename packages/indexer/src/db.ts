@@ -45,6 +45,22 @@ export async function initDb(): Promise<void> {
       created_at TIMESTAMP DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS wrapper_deposits (
+      id SERIAL PRIMARY KEY,
+      account TEXT NOT NULL,
+      amount BIGINT NOT NULL,
+      ledger INT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS wrapper_withdrawals (
+      id SERIAL PRIMARY KEY,
+      account TEXT NOT NULL,
+      amount BIGINT NOT NULL,
+      ledger INT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
     CREATE TABLE IF NOT EXISTS indexer_state (
       id INT PRIMARY KEY DEFAULT 1,
       last_ledger INT NOT NULL DEFAULT 0
