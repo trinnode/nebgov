@@ -5,6 +5,7 @@ import { invalidate, invalidatePattern } from "./cache";
 export interface IndexerConfig {
   rpcUrl: string;
   governorAddress: string;
+  wrapperAddress?: string;
   pollIntervalMs: number;
 }
 
@@ -28,12 +29,15 @@ export async function processEvents(
   let latestLedger = startLedger;
 
   try {
+    const contractIds = [config.governorAddress].filter(Boolean);
+    if (config.wrapperAddress) contractIds.push(config.wrapperAddress);
+
     const response = await server.getEvents({
       startLedger,
       filters: [
         {
           type: "contract",
-          contractIds: [config.governorAddress],
+          contractIds,
         },
       ],
       limit: 200,
@@ -45,29 +49,48 @@ export async function processEvents(
 
       const topics = event.topic.map((t) => scValToNative(t));
       const eventType = topics[0] as string;
+      // Soroban EventResponse includes contractId for contract events.
+      const contractId = (event as any).contractId as string | undefined;
+      const isWrapper = !!(contractId && config.wrapperAddress && contractId === config.wrapperAddress);
 
       try {
-        switch (eventType) {
-          case "prop_crtd":
-            await handleProposalCreated(event, topics);
-            break;
-          case "vote":
-            await handleVoteCast(event, topics, false);
-            break;
-          case "vote_rsn":
-            await handleVoteCast(event, topics, true);
-            break;
-          case "queued":
-            await handleProposalQueued(topics);
-            break;
-          case "executed":
-            await handleProposalExecuted(topics);
-            break;
-          case "delegate":
-            await handleDelegateChanged(event, topics);
-            break;
-          default:
-            break;
+        if (isWrapper) {
+          switch (eventType) {
+            case "deposit":
+              await handleWrapperDeposit(event, topics);
+              break;
+            case "withdraw":
+              await handleWrapperWithdraw(event, topics);
+              break;
+            case "delegate":
+              await handleDelegateChanged(event, topics);
+              break;
+            default:
+              break;
+          }
+        } else {
+          switch (eventType) {
+            case "prop_crtd":
+              await handleProposalCreated(event, topics);
+              break;
+            case "vote":
+              await handleVoteCast(event, topics, false);
+              break;
+            case "vote_rsn":
+              await handleVoteCast(event, topics, true);
+              break;
+            case "queued":
+              await handleProposalQueued(topics);
+              break;
+            case "executed":
+              await handleProposalExecuted(topics);
+              break;
+            case "delegate":
+              await handleDelegateChanged(event, topics);
+              break;
+            default:
+              break;
+          }
         }
       } catch (err) {
         console.error(`Failed to process event ${eventType}:`, err);
@@ -168,4 +191,36 @@ async function handleDelegateChanged(
   );
   invalidatePattern("delegates:");
   invalidate(`profile:${delegator}`);
+}
+
+async function handleWrapperDeposit(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[]
+): Promise<void> {
+  const account = topics[1] as string;
+  const data = scValToNative(event.value) as unknown[];
+  const amount = String(data[1] as bigint);
+
+  await pool.query(
+    `INSERT INTO wrapper_deposits (account, amount, ledger)
+     VALUES ($1, $2, $3)`,
+    [account, amount, event.ledger]
+  );
+  invalidate(`profile:${account}`);
+}
+
+async function handleWrapperWithdraw(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[]
+): Promise<void> {
+  const account = topics[1] as string;
+  const data = scValToNative(event.value) as unknown[];
+  const amount = String(data[1] as bigint);
+
+  await pool.query(
+    `INSERT INTO wrapper_withdrawals (account, amount, ledger)
+     VALUES ($1, $2, $3)`,
+    [account, amount, event.ledger]
+  );
+  invalidate(`profile:${account}`);
 }
