@@ -444,13 +444,14 @@ impl GovernorContract {
             .instance()
             .get(&DataKey::ProposalCooldown)
             .unwrap_or(100);
-        let last_proposal_ledger: u32 = env
+        let last_proposal_ledger: Option<u32> = env
             .storage()
             .persistent()
-            .get(&DataKey::LastProposalLedger(proposer.clone()))
-            .unwrap_or(0);
-        if current_ledger < last_proposal_ledger + cooldown {
-            env.panic_with_error(GovernorError::ProposalRateLimited);
+            .get(&DataKey::LastProposalLedger(proposer.clone()));
+        if let Some(last) = last_proposal_ledger {
+            if current_ledger < last + cooldown {
+                env.panic_with_error(GovernorError::ProposalRateLimited);
+            }
         }
 
         // Check max proposals per period
@@ -564,6 +565,8 @@ impl GovernorContract {
             ),
         );
 
+        events::emit_proposal_created(&env, &proposal);
+
         proposal_id
     }
 
@@ -672,10 +675,7 @@ impl GovernorContract {
             .set(&DataKey::VoteReceipt(proposal_id, voter.clone()), &receipt);
 
         // Emit VoteCast event including the weighted vote power.
-        env.events().publish(
-            (symbol_short!("vote"), voter),
-            (proposal_id, support, weight),
-        );
+        events::emit_vote_cast(&env, &voter, proposal_id, &support, weight);
     }
 
     /// Cast a vote with an on-chain reason string.
@@ -746,10 +746,7 @@ impl GovernorContract {
             .set(&DataKey::VoteReceipt(proposal_id, voter.clone()), &receipt);
 
         // Emit VoteCastWithReason event
-        env.events().publish(
-            (symbol_short!("vote_rsn"), voter),
-            (proposal_id, support, reason),
-        );
+        events::emit_vote_cast_with_reason(&env, &voter, proposal_id, &support, weight, reason);
     }
 
     /// Queue a succeeded proposal for execution via the timelock.
@@ -831,11 +828,6 @@ impl GovernorContract {
             .persistent()
             .set(&DataKey::QueueTime(proposal_id), &queue_time);
 
-        // Emit ProposalQueued event with the timelock ETA (`ready_at`) and veto window info.
-        env.events().publish(
-            (Symbol::new(&env, "ProposalQueued"),),
-            (proposal_id, ready_at, queue_time),
-        );
         let first_op_id = proposal.op_ids.get(0).unwrap();
         events::emit_proposal_queued(&env, proposal_id, &first_op_id, ready_at);
     }
@@ -945,6 +937,56 @@ impl GovernorContract {
         events::emit_proposal_cancelled(&env, proposal_id, &caller);
     }
 
+    /// Cancel a proposal via governance vote.
+    ///
+    /// This function can only be called by the governor contract itself,
+    /// which means it must be triggered as an action in a successful proposal.
+    /// This allows the community to cancel other proposals through the standard
+    /// voting process.
+    ///
+    /// If the target proposal is already queued, its associated timelock
+    /// operations are also cancelled.
+    pub fn cancel_by_governance(env: Env, proposal_id: u64) {
+        // Only callable by the governor contract itself
+        env.current_contract_address().require_auth();
+
+        let proposal: Proposal = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Proposal(proposal_id))
+            .expect("proposal not found");
+
+        // Verify the proposal is not already executed or cancelled
+        assert!(
+            !proposal.executed && !proposal.cancelled,
+            "proposal already executed or cancelled"
+        );
+
+        let mut proposal_mut = proposal;
+        proposal_mut.cancelled = true;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Proposal(proposal_id), &proposal_mut);
+
+        // If the proposal was queued, cancel its timelock operations
+        if proposal_mut.queued {
+            let timelock_addr: Address = env
+                .storage()
+                .instance()
+                .get(&DataKey::Timelock)
+                .expect("timelock not set");
+            let timelock = TimelockClient::new(&env, &timelock_addr);
+            let gov_addr = env.current_contract_address();
+
+            for i in 0..proposal_mut.op_ids.len() {
+                let op_id = proposal_mut.op_ids.get(i).unwrap();
+                timelock.cancel(&gov_addr, &op_id);
+            }
+        }
+
+        events::emit_proposal_cancelled(&env, proposal_id, &env.current_contract_address());
+    }
+
     /// Cancel a queued proposal during the veto window.
     ///
     /// Only the guardian can cancel a queued proposal, and only within the veto
@@ -1015,9 +1057,9 @@ impl GovernorContract {
             timelock.cancel(&gov_addr, &op_id);
         }
 
-        // Emit ProposalCancelledFromQueue event
+        // Emit ProposalCancelledFromQueue event (TODO: add helper for veto event)
         env.events().publish(
-            (symbol_short!("veto"), caller.clone()),
+            (Symbol::new(&env, "ProposalCancelled"), caller.clone()),
             (proposal_id, queue_time, current_ledger),
         );
     }
@@ -1527,7 +1569,7 @@ impl GovernorContract {
         env.storage().instance().set(&DataKey::IsPaused, &true);
 
         env.events().publish(
-            (symbol_short!("paused"),),
+            (Symbol::new(&env, "ContractPaused"),),
             (caller, env.ledger().sequence()),
         );
     }
@@ -1742,7 +1784,7 @@ mod test {
             topics.len() >= 1 && {
                 let first: Result<soroban_sdk::Symbol, _> =
                     topics.get(0).unwrap().try_into_val(&env);
-                first.is_ok() && first.unwrap() == symbol_short!("vote_rsn")
+                first.is_ok() && first.unwrap() == Symbol::new(&env, "VoteCastWithReason")
             }
         });
 

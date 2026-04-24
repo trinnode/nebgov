@@ -4,6 +4,7 @@ use crate::{GovernorSettings, Proposal, VoteSupport};
 
 pub const PROPOSAL_CREATED_TOPIC: &str = "ProposalCreated";
 pub const VOTE_CAST_TOPIC: &str = "VoteCast";
+pub const VOTE_CAST_WITH_REASON_TOPIC: &str = "VoteCastWithReason";
 pub const PROPOSAL_QUEUED_TOPIC: &str = "ProposalQueued";
 pub const PROPOSAL_EXECUTED_TOPIC: &str = "ProposalExecuted";
 pub const PROPOSAL_CANCELLED_TOPIC: &str = "ProposalCancelled";
@@ -31,6 +32,16 @@ pub struct VoteCastEvent {
     pub voter: Address,
     pub support: u32,
     pub weight: i128,
+}
+
+#[derive(Clone)]
+#[soroban_sdk::contracttype]
+pub struct VoteCastWithReasonEvent {
+    pub proposal_id: u64,
+    pub voter: Address,
+    pub support: u32,
+    pub weight: i128,
+    pub reason: String,
 }
 
 #[derive(Clone)]
@@ -86,7 +97,10 @@ fn vote_support_to_u32(support: &VoteSupport) -> u32 {
 
 pub fn emit_proposal_created(env: &Env, proposal: &Proposal) {
     env.events().publish(
-        (Symbol::new(env, PROPOSAL_CREATED_TOPIC),),
+        (
+            Symbol::new(env, PROPOSAL_CREATED_TOPIC),
+            proposal.proposer.clone(),
+        ),
         ProposalCreatedEvent {
             proposal_id: proposal.id,
             proposer: proposal.proposer.clone(),
@@ -108,12 +122,32 @@ pub fn emit_vote_cast(
     weight: i128,
 ) {
     env.events().publish(
-        (Symbol::new(env, VOTE_CAST_TOPIC),),
+        (Symbol::new(env, VOTE_CAST_TOPIC), voter.clone()),
         VoteCastEvent {
             proposal_id,
             voter: voter.clone(),
             support: vote_support_to_u32(support),
             weight,
+        },
+    );
+}
+
+pub fn emit_vote_cast_with_reason(
+    env: &Env,
+    voter: &Address,
+    proposal_id: u64,
+    support: &VoteSupport,
+    weight: i128,
+    reason: String,
+) {
+    env.events().publish(
+        (Symbol::new(env, VOTE_CAST_WITH_REASON_TOPIC),),
+        VoteCastWithReasonEvent {
+            proposal_id,
+            voter: voter.clone(),
+            support: vote_support_to_u32(support),
+            weight,
+            reason,
         },
     );
 }

@@ -567,6 +567,116 @@ export class GovernorClient {
   }
 
   /**
+   * Cancel a proposal (can only be done by the proposer while it's Pending).
+   */
+  async cancel(
+    signer: Keypair,
+    proposalId: bigint,
+  ): Promise<void> {
+    const account = await this.server.getAccount(signer.publicKey());
+
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(
+        this.contract.call(
+          "cancel",
+          nativeToScVal(signer.publicKey(), { type: "address" }),
+          nativeToScVal(proposalId, { type: "u64" }),
+        ),
+      )
+      .setTimeout(30)
+      .build();
+
+    const prepared = await this.server.prepareTransaction(tx);
+    prepared.sign(signer);
+
+    const result = await this.server.sendTransaction(prepared);
+    if (result.status === "ERROR") {
+      throw new Error(`Transaction failed: ${JSON.stringify(result)}`);
+    }
+
+    await this.pollForConfirmation(result.hash);
+  }
+
+  /**
+   * Cancel a proposal via governance (must be called by the governor contract itself).
+   *
+   * This is typically used as an action in another proposal.
+   *
+   * @param signer The account authorizing the transaction (must be the governor itself if called directly)
+   * @param proposalId The ID of the proposal to cancel
+   */
+  async cancelByGovernance(
+    signer: Keypair,
+    proposalId: bigint,
+  ): Promise<void> {
+    const account = await this.server.getAccount(signer.publicKey());
+
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(
+        this.contract.call(
+          "cancel_by_governance",
+          nativeToScVal(proposalId, { type: "u64" }),
+        ),
+      )
+      .setTimeout(30)
+      .build();
+
+    const prepared = await this.server.prepareTransaction(tx);
+    prepared.sign(signer);
+
+    const result = await this.server.sendTransaction(prepared);
+    if (result.status === "ERROR") {
+      throw new Error(`Transaction failed: ${JSON.stringify(result)}`);
+    }
+
+    await this.pollForConfirmation(result.hash);
+  }
+
+  /**
+   * Same as {@link cancelByGovernance} but signs with a wallet callback.
+   */
+  async cancelByGovernanceWithSign(
+    signerPublicKey: string,
+    proposalId: bigint,
+    signUnsignedXdr: (xdr: string) => Promise<string>,
+  ): Promise<void> {
+    const account = await this.server.getAccount(signerPublicKey);
+
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(
+        this.contract.call(
+          "cancel_by_governance",
+          nativeToScVal(proposalId, { type: "u64" }),
+        ),
+      )
+      .setTimeout(30)
+      .build();
+
+    const prepared = await this.server.prepareTransaction(tx);
+    const signedXdr = await signUnsignedXdr(prepared.toXDR());
+    const signed = TransactionBuilder.fromXDR(
+      signedXdr,
+      this.networkPassphrase,
+    );
+
+    const result = await this.server.sendTransaction(signed);
+    if (result.status === "ERROR") {
+      throw new Error(`Transaction failed: ${JSON.stringify(result)}`);
+    }
+
+    await this.pollForConfirmation(result.hash);
+  }
+
+  /**
    * Get the current state of a proposal.
    * TODO issue #17: decode all 7 ProposalState variants.
    */

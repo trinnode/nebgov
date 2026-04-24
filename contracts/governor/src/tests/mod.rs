@@ -1,5 +1,5 @@
+mod governance_cancel;
 mod integration;
-mod transitions;
 
 // ── upgrade auth tests ────────────────────────────────────────────────────────
 // Note: a full end-to-end upgrade test (auth passes → WASM swapped) requires
@@ -15,12 +15,15 @@ use soroban_sdk::{
 };
 
 fn count_topic(env: &Env, topic_name: &str) -> usize {
+    let topic_symbol = Symbol::new(env, topic_name);
     env.events()
         .all()
         .iter()
         .filter(|(_, topics, _)| {
-            let first: Result<Symbol, _> = topics.get(0).unwrap().try_into_val(env);
-            first.is_ok() && first.unwrap() == Symbol::new(env, topic_name)
+            topics.len() > 0 && {
+                let first: Result<Symbol, _> = topics.get(0).unwrap().try_into_val(env);
+                first.is_ok() && first.unwrap() == topic_symbol
+            }
         })
         .count()
 }
@@ -125,7 +128,22 @@ fn update_config_rejects_caller_that_is_not_the_contract_address() {
     let client = GovernorContractClient::new(&env, &contract_id);
 
     let attacker = Address::generate(&env);
-    let new_settings = settings_with_defaults(&env, Address::generate(&env));
+    let new_settings = GovernorSettings {
+        voting_delay: 200,
+        voting_period: 2000,
+        quorum_numerator: 10,
+        proposal_threshold: 500,
+        guardian: Address::generate(&env),
+        vote_type: VoteType::Extended,
+        proposal_grace_period: 120_960,
+        use_dynamic_quorum: false,
+        reflector_oracle: None,
+        min_quorum_usd: 0,
+        max_calldata_size: 10_000,
+        proposal_cooldown: 100,
+        max_proposals_per_period: 5,
+        proposal_period_duration: 10_000,
+    };
 
     env.mock_auths(&[MockAuth {
         address: &attacker,
@@ -170,13 +188,22 @@ fn update_config_succeeds_with_contract_self_auth() {
     assert_eq!(old_settings.quorum_numerator, 4);
     assert_eq!(old_settings.proposal_threshold, 0);
 
-    let mut new_settings = old_settings.clone();
-    new_settings.voting_delay = 200;
-    new_settings.voting_period = 2000;
-    new_settings.quorum_numerator = 5;
-    new_settings.proposal_threshold = 1000;
-    new_settings.vote_type = VoteType::Simple;
-    new_settings.proposal_grace_period = 604800;
+    let new_settings = GovernorSettings {
+        voting_delay: 200,
+        voting_period: 2000,
+        quorum_numerator: 5,
+        proposal_threshold: 1000,
+        guardian: old_settings.guardian.clone(),
+        vote_type: VoteType::Simple,
+        proposal_grace_period: 604800,
+        use_dynamic_quorum: false,
+        reflector_oracle: None,
+        min_quorum_usd: 0,
+        max_calldata_size: 10_000,
+        proposal_cooldown: 100,
+        max_proposals_per_period: 5,
+        proposal_period_duration: 10_000,
+    };
 
     client.update_config(&new_settings);
 
