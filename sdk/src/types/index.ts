@@ -71,6 +71,8 @@ export interface GovernorConfig {
   network: Network;
   /** RPC URL override (optional — defaults to public horizon) */
   rpcUrl?: string;
+  /** Optional funded classic account used for read-only simulation calls. */
+  simulationAccount?: string;
 }
 
 export interface TimelockOperation {

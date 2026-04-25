@@ -259,7 +259,7 @@ export class GovernorClient {
   async proposalThreshold(): Promise<bigint> {
     const result = await this.server.simulateTransaction(
       new TransactionBuilder(
-        await this.server.getAccount(this.config.governorAddress),
+        await this.server.getAccount(this.readAccount()),
         { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
       )
         .addOperation(this.contract.call("proposal_threshold"))
@@ -275,10 +275,11 @@ export class GovernorClient {
 
   /** Read the full governor settings struct via `get_settings()`. */
   async getSettings(
-    sourceAccount: string = this.config.governorAddress,
+    sourceAccount?: string,
   ): Promise<GovernorSettings> {
+    const readAccount = this.readAccount(sourceAccount);
     const result = await this.server.simulateTransaction(
-      new TransactionBuilder(await this.server.getAccount(sourceAccount), {
+      new TransactionBuilder(await this.server.getAccount(readAccount), {
         fee: BASE_FEE,
         networkPassphrase: this.networkPassphrase,
       })
@@ -371,8 +372,9 @@ export class GovernorClient {
    */
   async simulateProposal(
     actions: ProposalAction[],
-    sourceAccount: string = this.config.governorAddress,
+    sourceAccount?: string,
   ): Promise<ProposalSimulationResult> {
+    const readAccount = this.readAccount(sourceAccount);
     try {
       let computeUnits = 0;
       const stateChanges: unknown[] = [];
@@ -385,7 +387,7 @@ export class GovernorClient {
         );
         const result = await this.server.simulateTransaction(
           new TransactionBuilder(
-            await this.server.getAccount(sourceAccount),
+            await this.server.getAccount(readAccount),
             { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
           )
             .addOperation(op)
@@ -492,9 +494,9 @@ export class GovernorClient {
    */
   async estimateExecutionGas(
     proposalId: bigint,
-    sourceAccount: string = this.config.governorAddress,
+    sourceAccount?: string,
   ): Promise<ExecutionGasEstimate> {
-    const account = await this.server.getAccount(sourceAccount);
+    const account = await this.server.getAccount(this.readAccount(sourceAccount));
     const tx = new TransactionBuilder(account, {
       fee: BASE_FEE,
       networkPassphrase: this.networkPassphrase,
@@ -737,7 +739,7 @@ export class GovernorClient {
   async getProposalState(proposalId: bigint): Promise<ProposalState> {
     const result = await this.server.simulateTransaction(
       new TransactionBuilder(
-        await this.server.getAccount(this.config.governorAddress),
+        await this.server.getAccount(this.readAccount()),
         { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
       )
         .addOperation(
@@ -797,7 +799,7 @@ export class GovernorClient {
   async getProposalVotes(proposalId: bigint): Promise<ProposalVotes> {
     const result = await this.server.simulateTransaction(
       new TransactionBuilder(
-        await this.server.getAccount(this.config.governorAddress),
+        await this.server.getAccount(this.readAccount()),
         { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
       )
         .addOperation(
@@ -834,7 +836,7 @@ export class GovernorClient {
     try {
       const result = await this.server.simulateTransaction(
         new TransactionBuilder(
-          await this.server.getAccount(this.config.governorAddress),
+          await this.server.getAccount(this.readAccount()),
           { fee: BASE_FEE, networkPassphrase: this.networkPassphrase }
         )
           .addOperation(
@@ -907,7 +909,7 @@ export class GovernorClient {
   async proposalCount(): Promise<bigint> {
     const result = await this.server.simulateTransaction(
       new TransactionBuilder(
-        await this.server.getAccount(this.config.governorAddress),
+        await this.server.getAccount(this.readAccount()),
         { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
       )
         .addOperation(this.contract.call("proposal_count"))
@@ -1005,7 +1007,7 @@ export class GovernorClient {
   }> {
     const result = await this.server.simulateTransaction(
       new TransactionBuilder(
-        await this.server.getAccount(this.config.governorAddress),
+        await this.server.getAccount(this.readAccount()),
         { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
       )
         .addOperation(
@@ -1201,6 +1203,14 @@ export class GovernorClient {
 
   // --- Internal ---
 
+  private readAccount(sourceAccount?: string): string {
+    return (
+      sourceAccount ??
+      this.config.simulationAccount ??
+      this.config.governorAddress
+    );
+  }
+
   private async pollForConfirmation(
     hash: string,
     retries = 10,
@@ -1225,7 +1235,7 @@ export class GovernorClient {
   async getProposal(proposalId: bigint): Promise<Proposal> {
     const result = await this.server.simulateTransaction(
       new TransactionBuilder(
-        await this.server.getAccount(this.config.governorAddress),
+        await this.server.getAccount(this.readAccount()),
         { fee: BASE_FEE, networkPassphrase: this.networkPassphrase }
       )
         .addOperation(

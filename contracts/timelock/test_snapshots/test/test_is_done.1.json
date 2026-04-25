@@ -50,7 +50,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
                 },
                 {
-                  "bytes": "63616c6c64617461"
+                  "bytes": ""
                 },
                 {
                   "symbol": "exec"
@@ -85,7 +85,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                 },
                 {
-                  "bytes": "aab81953d4282686ed557d4257f771d70da4a031b980a403341df2a947ef7be1"
+                  "bytes": "03b07df31ca4bcd5754b472170dd2e99570c11b0f73d632d4ad64170ddff48e3"
                 }
               ]
             }
@@ -117,7 +117,7 @@
                   "symbol": "Operation"
                 },
                 {
-                  "bytes": "aab81953d4282686ed557d4257f771d70da4a031b980a403341df2a947ef7be1"
+                  "bytes": "03b07df31ca4bcd5754b472170dd2e99570c11b0f73d632d4ad64170ddff48e3"
                 }
               ]
             },
@@ -137,7 +137,7 @@
                       "symbol": "Operation"
                     },
                     {
-                      "bytes": "aab81953d4282686ed557d4257f771d70da4a031b980a403341df2a947ef7be1"
+                      "bytes": "03b07df31ca4bcd5754b472170dd2e99570c11b0f73d632d4ad64170ddff48e3"
                     }
                   ]
                 },
@@ -157,7 +157,7 @@
                         "symbol": "data"
                       },
                       "val": {
-                        "bytes": "63616c6c64617461"
+                        "bytes": ""
                       }
                     },
                     {

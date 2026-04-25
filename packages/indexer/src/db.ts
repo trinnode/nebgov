@@ -68,5 +68,18 @@ export async function initDb(): Promise<void> {
 
     INSERT INTO indexer_state (id, last_ledger) VALUES (1, 0)
     ON CONFLICT (id) DO NOTHING;
+
+    CREATE INDEX IF NOT EXISTS idx_proposals_created_at ON proposals(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_proposals_proposer ON proposals(proposer);
+
+    CREATE INDEX IF NOT EXISTS idx_votes_proposal_id ON votes(proposal_id);
+    CREATE INDEX IF NOT EXISTS idx_votes_voter ON votes(voter);
+
+    CREATE INDEX IF NOT EXISTS idx_delegates_delegator ON delegates(delegator);
+    CREATE INDEX IF NOT EXISTS idx_delegates_ledger ON delegates(ledger DESC);
+    CREATE INDEX IF NOT EXISTS idx_delegates_new_delegatee ON delegates(new_delegatee);
+
+    CREATE INDEX IF NOT EXISTS idx_wrapper_deposits_account ON wrapper_deposits(account);
+    CREATE INDEX IF NOT EXISTS idx_wrapper_withdrawals_account ON wrapper_withdrawals(account);
   `);
 }

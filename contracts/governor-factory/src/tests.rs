@@ -8,15 +8,11 @@ use sorogov_token_votes::TokenVotesContract;
 // Import the WASM binaries for the contracts we want to deploy.
 // These are built via `stellar contract build`
 mod wasm {
-    soroban_sdk::contractimport!(
-        file = "../../target/wasm32v1-none/release/sorogov_governor.wasm"
-    );
+    soroban_sdk::contractimport!(file = "../../target/wasm32v1-none/release/sorogov_governor.wasm");
 }
 
 mod timelock_wasm {
-    soroban_sdk::contractimport!(
-        file = "../../target/wasm32v1-none/release/sorogov_timelock.wasm"
-    );
+    soroban_sdk::contractimport!(file = "../../target/wasm32v1-none/release/sorogov_timelock.wasm");
 }
 
 mod token_votes_wasm {
@@ -39,7 +35,7 @@ fn upload_wasms(env: &Env) -> (BytesN<32>, BytesN<32>, BytesN<32>) {
 #[should_panic(expected = "already initialized")]
 fn test_initialize_twice_panics() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
 
     let admin = Address::generate(&env);
     let hash = BytesN::from_array(&env, &[0u8; 32]);
@@ -56,7 +52,7 @@ fn test_initialize_twice_panics() {
 #[test]
 fn test_deploy_full_stack() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
 
     // Register the sibling contracts so their WASM is available in the env.
     // We don't need the returned addresses here; we just need the WASM hash.
@@ -79,13 +75,15 @@ fn test_deploy_full_stack() {
     // Deploy a governance stack
     let guardian = Address::generate(&env);
     let id = factory.deploy(
-        &deployer, &token, &100u32,   // voting_delay
-        &1000u32,  // voting_period
-        &50u32,    // quorum_numerator
-        &1000i128, // proposal_threshold
-        &3600u64,  // timelock_delay
-        &guardian, // guardian
-        &1u32,     // vote_type (1=Extended)
+        &deployer,
+        &token,
+        &100u32,     // voting_delay
+        &1000u32,    // voting_period
+        &50u32,      // quorum_numerator
+        &1000i128,   // proposal_threshold
+        &3600u64,    // timelock_delay
+        &guardian,   // guardian
+        &1u32,       // vote_type (1=Extended)
         &120_960u32, // proposal_grace_period (~7 days)
     );
 
@@ -127,7 +125,7 @@ fn test_deploy_full_stack() {
 #[test]
 fn test_second_deploy_has_different_addresses() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
 
     env.register(GovernorContract, ());
     env.register(TimelockContract, ());
@@ -145,12 +143,28 @@ fn test_second_deploy_has_different_addresses() {
 
     let guardian = Address::generate(&env);
     let id1 = factory.deploy(
-        &deployer, &token, &100u32, &1000u32, &50u32, &0i128, &86400u64,
-        &guardian, &1u32, &120_960u32,
+        &deployer,
+        &token,
+        &100u32,
+        &1000u32,
+        &50u32,
+        &0i128,
+        &86400u64,
+        &guardian,
+        &1u32,
+        &120_960u32,
     );
     let id2 = factory.deploy(
-        &deployer, &token, &200u32, &2000u32, &40u32, &0i128, &43200u64,
-        &guardian, &1u32, &120_960u32,
+        &deployer,
+        &token,
+        &200u32,
+        &2000u32,
+        &40u32,
+        &0i128,
+        &43200u64,
+        &guardian,
+        &1u32,
+        &120_960u32,
     );
 
     assert_eq!(id1, 1);

@@ -42,11 +42,13 @@ const DEFAULT_SCAN_WINDOW = 17_280;
  * Handles delegation, voting power queries, and governance health analytics.
  */
 export class VotesClient {
+  private readonly config: GovernorConfig;
   private readonly server: SorobanRpc.Server;
   private readonly contract: Contract;
   private readonly networkPassphrase: string;
 
   constructor(config: GovernorConfig) {
+    this.config = config;
     const rpcUrl = config.rpcUrl ?? RPC_URLS[config.network];
     this.server = new SorobanRpc.Server(rpcUrl, { allowHttp: false });
     this.contract = new Contract(config.votesAddress);
@@ -113,7 +115,7 @@ export class VotesClient {
    */
   async getVotes(account: string): Promise<bigint> {
     const result = await this.server.simulateTransaction(
-      new TransactionBuilder(await this.server.getAccount(account), {
+      new TransactionBuilder(await this.server.getAccount(this.readAccount(account)), {
         fee: BASE_FEE,
         networkPassphrase: this.networkPassphrase,
       })
@@ -138,7 +140,7 @@ export class VotesClient {
    */
   async getPastVotes(account: string, ledger: number): Promise<bigint> {
     const result = await this.server.simulateTransaction(
-      new TransactionBuilder(await this.server.getAccount(account), {
+      new TransactionBuilder(await this.server.getAccount(this.readAccount(account)), {
         fee: BASE_FEE,
         networkPassphrase: this.networkPassphrase,
       })
@@ -164,7 +166,7 @@ export class VotesClient {
    */
   async getDelegatee(account: string): Promise<string | null> {
     const result = await this.server.simulateTransaction(
-      new TransactionBuilder(await this.server.getAccount(account), {
+      new TransactionBuilder(await this.server.getAccount(this.readAccount(account)), {
         fee: BASE_FEE,
         networkPassphrase: this.networkPassphrase,
       })
@@ -190,7 +192,7 @@ export class VotesClient {
   async getTotalSupply(): Promise<bigint> {
     const result = await this.server.simulateTransaction(
       new TransactionBuilder(
-        await this.server.getAccount(this.contract.contractId()),
+        await this.server.getAccount(this.readAccount()),
         { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
       )
         .addOperation(this.contract.call("total_supply"))
@@ -210,7 +212,7 @@ export class VotesClient {
   async getPastTotalSupply(ledger: number): Promise<bigint> {
     const result = await this.server.simulateTransaction(
       new TransactionBuilder(
-        await this.server.getAccount(this.contract.contractId()),
+        await this.server.getAccount(this.readAccount()),
         { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
       )
         .addOperation(
@@ -463,6 +465,10 @@ export class VotesClient {
   }
 
   // ─── Internal ──────────────────────────────────────────────────────────────
+
+  private readAccount(fallback?: string): string {
+    return this.config.simulationAccount ?? fallback ?? this.contract.contractId();
+  }
 
   /**
    * Scan all `del_chsh` (delegate changed) events from the token-votes

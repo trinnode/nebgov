@@ -1,11 +1,13 @@
 import {
   parseConfigUpdatedEvent,
   parseGovernorUpgradedEvent,
+  parsePauseEvent,
   parseProposalCancelledEvent,
   parseProposalCreatedEvent,
   parseProposalExecutedEvent,
   parseProposalExpiredEvent,
   parseProposalQueuedEvent,
+  parseUnpauseEvent,
   parseVoteCastEvent,
   SorobanEvent,
 } from "../events";
@@ -183,5 +185,55 @@ describe("event parsers", () => {
         proposalThreshold: 200n,
       },
     });
+  });
+
+  it("parses Paused", () => {
+    const event: SorobanEvent = {
+      ledger: 9,
+      contractId: "C123",
+      topic: ["Paused", "GPAUSER"],
+      value: {
+        pauser: "GPAUSER",
+        ledger: 9,
+      },
+    };
+
+    expect(parsePauseEvent(event)).toEqual({
+      pauser: "GPAUSER",
+      ledger: 9,
+    });
+  });
+
+  it("parsePauseEvent returns null for wrong topic", () => {
+    const event: SorobanEvent = {
+      ledger: 9,
+      contractId: "C123",
+      topic: ["SomethingElse"],
+      value: { pauser: "GPAUSER", ledger: 9 },
+    };
+    expect(parsePauseEvent(event)).toBeNull();
+  });
+
+  it("parses Unpaused", () => {
+    const event: SorobanEvent = {
+      ledger: 10,
+      contractId: "C123",
+      topic: ["Unpaused"],
+      value: {
+        ledger: 10,
+      },
+    };
+
+    expect(parseUnpauseEvent(event)).toEqual({ ledger: 10 });
+  });
+
+  it("parseUnpauseEvent returns null for wrong topic", () => {
+    const event: SorobanEvent = {
+      ledger: 10,
+      contractId: "C123",
+      topic: ["Paused"],
+      value: { ledger: 10 },
+    };
+    expect(parseUnpauseEvent(event)).toBeNull();
   });
 });

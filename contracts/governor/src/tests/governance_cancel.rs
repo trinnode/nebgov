@@ -1,10 +1,7 @@
-use crate::{GovernorContract, GovernorContractClient, VoteType, ProposalState};
-use sorogov_timelock::{TimelockContract};
-use sorogov_token_votes::{TokenVotesContract};
-use soroban_sdk::{
-    testutils::{Address as _},
-    Address, Env, Symbol,
-};
+use crate::{GovernorContract, GovernorContractClient, ProposalState, VoteType};
+use soroban_sdk::{testutils::Address as _, Address, Env, Symbol};
+use sorogov_timelock::TimelockContract;
+use sorogov_token_votes::TokenVotesContract;
 
 #[test]
 fn test_cancel_by_governance_success() {
@@ -12,7 +9,7 @@ fn test_cancel_by_governance_success() {
     env.mock_all_auths();
 
     let admin = Address::generate(&env);
-    
+
     let votes_id = env.register(TokenVotesContract, ());
     let timelock_id = env.register(TimelockContract, ());
     let governor_id = env.register(GovernorContract, ());
@@ -36,7 +33,7 @@ fn test_cancel_by_governance_success() {
     let targets = soroban_sdk::vec![&env, Address::generate(&env)];
     let fn_names = soroban_sdk::vec![&env, Symbol::new(&env, "test")];
     let calldatas = soroban_sdk::vec![&env, soroban_sdk::Bytes::new(&env)];
-    
+
     let proposal_id = governor_client.propose(
         &proposer,
         &soroban_sdk::String::from_str(&env, "test"),
@@ -51,7 +48,10 @@ fn test_cancel_by_governance_success() {
     // With mock_all_auths, require_auth() will succeed
     governor_client.cancel_by_governance(&proposal_id);
 
-    assert_eq!(governor_client.state(&proposal_id), ProposalState::Cancelled);
+    assert_eq!(
+        governor_client.state(&proposal_id),
+        ProposalState::Cancelled
+    );
 }
 
 #[test]
@@ -59,9 +59,9 @@ fn test_cancel_by_governance_success() {
 fn test_cancel_by_governance_unauthorized() {
     let env = Env::default();
     env.mock_all_auths();
-    
+
     let admin = Address::generate(&env);
-    
+
     let votes_id = env.register(TokenVotesContract, ());
     let timelock_id = env.register(TimelockContract, ());
     let governor_id = env.register(GovernorContract, ());
@@ -85,7 +85,7 @@ fn test_cancel_by_governance_unauthorized() {
     let targets = soroban_sdk::vec![&env, Address::generate(&env)];
     let fn_names = soroban_sdk::vec![&env, Symbol::new(&env, "test")];
     let calldatas = soroban_sdk::vec![&env, soroban_sdk::Bytes::new(&env)];
-    
+
     let proposal_id = governor_client.propose(
         &proposer,
         &soroban_sdk::String::from_str(&env, "test"),

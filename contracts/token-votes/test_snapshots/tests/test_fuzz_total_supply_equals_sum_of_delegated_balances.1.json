@@ -1653,6 +1653,18 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "CheckpointRetentionPeriod"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u32": 100800
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "Token"
                             }
                           ]

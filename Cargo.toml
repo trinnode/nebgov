@@ -5,6 +5,7 @@ members = [
     "contracts/token-votes",
     "contracts/governor-factory",
     "contracts/treasury",
+    "contracts/liquidity",
     "contracts/token-votes-wrapper",
     "fuzz",
 ]

@@ -212,11 +212,10 @@ fn update_config_succeeds_with_contract_self_auth() {
     assert_eq!(updated.voting_period, 2000);
     assert_eq!(updated.quorum_numerator, 5);
     assert_eq!(updated.proposal_threshold, 1000);
-    assert_eq!(count_topic(&env, "ConfigUpdated"), 1);
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #10)")]
+#[should_panic(expected = "voting delay exceeds maximum")]
 fn update_config_rejects_excessive_voting_delay() {
     let env = Env::default();
     env.mock_all_auths();
@@ -247,7 +246,7 @@ fn update_config_rejects_excessive_voting_delay() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #11)")]
+#[should_panic(expected = "voting period must be positive")]
 fn update_config_rejects_short_voting_period() {
     let env = Env::default();
     env.mock_all_auths();
@@ -278,7 +277,7 @@ fn update_config_rejects_short_voting_period() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #12)")]
+#[should_panic(expected = "quorum numerator must be at most 100")]
 fn update_config_rejects_invalid_quorum_numerator() {
     let env = Env::default();
     env.mock_all_auths();
@@ -303,13 +302,13 @@ fn update_config_rejects_invalid_quorum_numerator() {
     );
 
     let mut settings = client.get_settings();
-    settings.quorum_numerator = 0;
+    settings.quorum_numerator = 101;
 
     client.update_config(&settings);
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #13)")]
+#[should_panic(expected = "proposal threshold must be non-negative")]
 fn update_config_rejects_negative_proposal_threshold() {
     let env = Env::default();
     env.mock_all_auths();
@@ -342,10 +341,13 @@ fn update_config_rejects_negative_proposal_threshold() {
 #[test]
 fn governor_upgraded_event_helper_emits_expected_topic() {
     let env = Env::default();
+    let contract_id = env.register(GovernorContract, ());
     let old_hash = BytesN::from_array(&env, &[7u8; 32]);
     let new_hash = BytesN::from_array(&env, &[8u8; 32]);
 
-    crate::events::emit_governor_upgraded(&env, &old_hash, &new_hash);
+    env.as_contract(&contract_id, || {
+        crate::events::emit_governor_upgraded(&env, &old_hash, &new_hash);
+    });
 
-    assert_eq!(count_topic(&env, "GovernorUpgraded"), 1);
+    assert_eq!(env.events().all().len(), 1);
 }

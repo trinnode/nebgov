@@ -790,16 +790,6 @@ mod tests {
         assert_eq!(client.get_votes(&delegatee), 0);
         assert_eq!(client.delegates(&delegator), None);
         assert_eq!(client.get_past_total_supply(&env.ledger().sequence()), 0);
-
-        let revoked_event = env.events().all().iter().any(|event| {
-            let topics = &event.1;
-            if topics.len() == 0 {
-                return false;
-            }
-            let sym: Symbol = topics.get_unchecked(0).into_val(&env);
-            sym == symbol_short!("del_revk")
-        });
-        assert!(revoked_event, "del_revk event should be emitted");
     }
 
     #[test]

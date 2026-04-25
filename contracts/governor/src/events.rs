@@ -3,6 +3,8 @@ use soroban_sdk::{Address, Bytes, BytesN, Env, String, Symbol, Vec};
 use crate::{GovernorSettings, Proposal, VoteSupport};
 
 pub const PROPOSAL_CREATED_TOPIC: &str = "ProposalCreated";
+pub const PAUSED_TOPIC: &str = "Paused";
+pub const UNPAUSED_TOPIC: &str = "Unpaused";
 pub const VOTE_CAST_TOPIC: &str = "VoteCast";
 pub const VOTE_CAST_WITH_REASON_TOPIC: &str = "VoteCastWithReason";
 pub const PROPOSAL_QUEUED_TOPIC: &str = "ProposalQueued";
@@ -85,6 +87,19 @@ pub struct GovernorUpgradedEvent {
 pub struct ConfigUpdatedEvent {
     pub old_settings: GovernorSettings,
     pub new_settings: GovernorSettings,
+}
+
+#[derive(Clone)]
+#[soroban_sdk::contracttype]
+pub struct PauseEvent {
+    pub pauser: Address,
+    pub ledger: u32,
+}
+
+#[derive(Clone)]
+#[soroban_sdk::contracttype]
+pub struct UnpauseEvent {
+    pub ledger: u32,
 }
 
 fn vote_support_to_u32(support: &VoteSupport) -> u32 {
@@ -213,6 +228,25 @@ pub fn emit_config_updated(
         ConfigUpdatedEvent {
             old_settings: old_settings.clone(),
             new_settings: new_settings.clone(),
+        },
+    );
+}
+
+pub fn emit_paused(env: &Env, pauser: &Address) {
+    env.events().publish(
+        (Symbol::new(env, PAUSED_TOPIC), pauser.clone()),
+        PauseEvent {
+            pauser: pauser.clone(),
+            ledger: env.ledger().sequence(),
+        },
+    );
+}
+
+pub fn emit_unpaused(env: &Env) {
+    env.events().publish(
+        (Symbol::new(env, UNPAUSED_TOPIC),),
+        UnpauseEvent {
+            ledger: env.ledger().sequence(),
         },
     );
 }

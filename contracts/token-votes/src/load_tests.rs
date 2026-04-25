@@ -17,13 +17,16 @@ fn build_checkpoints(env: &Env, count: usize) -> soroban_sdk::Vec<Checkpoint> {
 }
 
 fn sample_ledgers(max_ledger: u32) -> [u32; 5] {
-    [1, max_ledger / 4, max_ledger / 2, (max_ledger * 3) / 4, max_ledger]
+    [
+        1,
+        max_ledger / 4,
+        max_ledger / 2,
+        (max_ledger * 3) / 4,
+        max_ledger,
+    ]
 }
 
-fn measure_query(
-    checkpoints: &soroban_sdk::Vec<Checkpoint>,
-    ledger: u32,
-) -> (i128, u64) {
+fn measure_query(checkpoints: &soroban_sdk::Vec<Checkpoint>, ledger: u32) -> (i128, u64) {
     let env = checkpoints.env();
     let mut budget = env.cost_estimate().budget();
     budget.reset_default();
@@ -58,7 +61,10 @@ fn test_cast_vote_with_1000_checkpoints_within_budget() {
     let max_500 = run_scale_case(500);
     let max_1000 = run_scale_case(1000);
 
-    assert!(max_500 >= max_100, "500 checkpoint case should not be faster than 100");
+    assert!(
+        max_500 >= max_100,
+        "500 checkpoint case should not be faster than 100"
+    );
     assert!(
         max_1000 >= max_500,
         "1000 checkpoint case should not be faster than 500"

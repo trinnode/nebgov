@@ -1,6 +1,6 @@
 # NebGov Architecture
 
-NebGov is a modular on-chain governance framework for Soroban. It is composed of five independent smart contracts that work together to provide a full governance lifecycle.
+NebGov is a modular on-chain governance framework for Soroban. It is composed of six independent smart contracts that work together to provide a full governance lifecycle and adjacent protocol operations.
 
 ## Table of Contents
 
@@ -9,6 +9,7 @@ NebGov is a modular on-chain governance framework for Soroban. It is composed of
 - [SDK](#sdk)
 - [Frontend](#frontend)
 - [Treasury Flows](./treasury.md)
+- [Liquidity Contract](./liquidity.md)
 - [Contract Upgrade Mechanism](#contract-upgrade-mechanism)
 - [Security Considerations](#security-considerations)
 - [Architecture Decision Records](#architecture-decision-records)
@@ -68,6 +69,9 @@ Deploys Governor + Timelock pairs permissionlessly. Any team can deploy their ow
 
 ### Treasury (`contracts/treasury`)
 A multi-signature treasury controlled by a set of owner addresses and a configurable approval threshold. Integrates with the governor so on-chain proposals can execute treasury transfers automatically.
+
+### Liquidity (`contracts/liquidity`)
+Maintains protocol-managed liquidity pools for paired outcome assets. User-facing pool actions are self-authorized, while privileged configuration changes such as fee updates are restricted to governance and intended to execute through the timelock.
 
 ## SDK (`sdk/`)
 

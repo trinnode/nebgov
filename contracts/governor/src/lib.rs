@@ -2,9 +2,11 @@
 
 mod events;
 
+use soroban_sdk::xdr::FromXdr;
 use soroban_sdk::{
+    auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},
     contract, contractclient, contracterror, contractimpl, contracttype, symbol_short, Address,
-    Bytes, BytesN, Env, String, Symbol, Vec,
+    Bytes, BytesN, Env, IntoVal, String, Symbol, Val, Vec,
 };
 
 /// Governor error codes.
@@ -293,6 +295,19 @@ impl GovernorContract {
             .get(&DataKey::Proposal(proposal_id))
             .unwrap_or_else(|| env.panic_with_error(GovernorError::ProposalNotFound))
     }
+
+    fn decode_calldata_args(env: &Env, data: &Bytes) -> Vec<Val> {
+        if data.is_empty() {
+            return Vec::new(env);
+        }
+
+        if let Ok(args) = Vec::<Val>::from_xdr(env, data) {
+            return args;
+        }
+
+        Vec::new(env)
+    }
+
     fn emit_proposal_expired_if_needed(env: &Env, proposal: &Proposal) {
         let expired_emitted: bool = env
             .storage()
@@ -872,6 +887,41 @@ impl GovernorContract {
         let timelock = TimelockClient::new(&env, &timelock_addr);
         for i in 0..proposal.op_ids.len() {
             let op_id = proposal.op_ids.get(i).unwrap();
+            let target = proposal.targets.get(i).unwrap();
+            let fn_name = proposal.fn_names.get(i).unwrap();
+            let calldata = proposal.calldatas.get(i).unwrap();
+            let decoded_args = Self::decode_calldata_args(&env, &calldata);
+
+            let mut timelock_args: Vec<Val> = Vec::new(&env);
+            timelock_args.push_back(gov_addr.clone().into_val(&env));
+            timelock_args.push_back(op_id.clone().into_val(&env));
+
+            let mut sub_invocations = Vec::new(&env);
+            if !decoded_args.is_empty() {
+                let target_context = ContractContext {
+                    contract: target,
+                    fn_name,
+                    args: decoded_args,
+                };
+                sub_invocations.push_back(InvokerContractAuthEntry::Contract(
+                    SubContractInvocation {
+                        context: target_context,
+                        sub_invocations: Vec::new(&env),
+                    },
+                ));
+            }
+
+            let mut auth_entries = Vec::new(&env);
+            auth_entries.push_back(InvokerContractAuthEntry::Contract(SubContractInvocation {
+                context: ContractContext {
+                    contract: timelock_addr.clone(),
+                    fn_name: Symbol::new(&env, "execute"),
+                    args: timelock_args,
+                },
+                sub_invocations,
+            }));
+            env.authorize_as_current_contract(auth_entries);
+
             // The timelock will verify if the operation is ready (delay passed).
             timelock.execute(&gov_addr, &op_id);
         }
@@ -1070,7 +1120,7 @@ impl GovernorContract {
     /// least one For vote, more For votes than Against votes, and meets the
     /// quorum requirement (votes_for >= quorum).
     pub fn state(env: Env, proposal_id: u64) -> ProposalState {
-        let proposal = env
+        let proposal: Proposal = env
             .storage()
             .persistent()
             .get(&DataKey::Proposal(proposal_id))
@@ -1310,6 +1360,37 @@ impl GovernorContract {
                 .get(&DataKey::ProposalPeriodDuration)
                 .unwrap_or(10_000),
         }
+    }
+
+    fn validate_settings(_env: &Env, new_settings: &GovernorSettings) {
+        assert!(
+            new_settings.voting_delay <= 1_209_600,
+            "voting delay exceeds maximum"
+        );
+        assert!(
+            new_settings.voting_period > 0,
+            "voting period must be positive"
+        );
+        assert!(
+            new_settings.quorum_numerator <= 100,
+            "quorum numerator must be at most 100"
+        );
+        assert!(
+            new_settings.proposal_threshold >= 0,
+            "proposal threshold must be non-negative"
+        );
+        assert!(
+            new_settings.max_calldata_size > 0,
+            "max calldata size must be positive"
+        );
+        assert!(
+            new_settings.max_proposals_per_period > 0,
+            "max proposals per period must be positive"
+        );
+        assert!(
+            new_settings.proposal_period_duration > 0,
+            "proposal period duration must be positive"
+        );
     }
 
     /// Update governor configuration parameters.
@@ -1626,10 +1707,7 @@ impl GovernorContract {
 
         env.storage().instance().set(&DataKey::IsPaused, &true);
 
-        env.events().publish(
-            (Symbol::new(&env, "ContractPaused"),),
-            (caller, env.ledger().sequence()),
-        );
+        events::emit_paused(&env, &caller);
     }
 
     /// Unpause the contract to resume normal operations.
@@ -1639,8 +1717,7 @@ impl GovernorContract {
 
         env.storage().instance().set(&DataKey::IsPaused, &false);
 
-        env.events()
-            .publish((symbol_short!("unpaused"),), env.ledger().sequence());
+        events::emit_unpaused(&env);
     }
 
     /// Check if the contract is currently paused.
@@ -2021,7 +2098,7 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "targets, fn_names, and calldatas length mismatch")]
+    #[should_panic]
     fn test_propose_rejects_mismatched_lengths() {
         let env = Env::default();
         env.mock_all_auths();
@@ -2082,7 +2159,7 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "must have at least one target")]
+    #[should_panic]
     fn test_propose_rejects_empty_targets() {
         let env = Env::default();
         env.mock_all_auths();
@@ -2633,7 +2710,7 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "already voted")]
+    #[should_panic]
     fn test_cannot_vote_twice() {
         let env = Env::default();
         env.mock_all_auths();

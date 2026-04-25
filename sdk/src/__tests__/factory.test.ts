@@ -3,6 +3,7 @@ var mockGetAccount = jest.fn();
 
 import { FactoryClient } from "../factory";
 import { xdr } from "@stellar/stellar-sdk";
+import type { FactoryConfig } from "../types";
 
 jest.mock("@stellar/stellar-sdk", () => {
   const actual = jest.requireActual("@stellar/stellar-sdk");
@@ -40,7 +41,7 @@ const { scValToNative } = require("@stellar/stellar-sdk");
 const { SorobanRpc } = require("@stellar/stellar-sdk");
 
 describe("FactoryClient", () => {
-  const config = {
+  const config: FactoryConfig = {
     factoryAddress: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB",
     network: "testnet",
     rpcUrl: "https://soroban-testnet.stellar.org",
@@ -53,7 +54,9 @@ describe("FactoryClient", () => {
   });
 
   it("fetches the governor count", async () => {
-    const response = { result: { retval: xdr.ScVal.scvU64(3n) } };
+    const response = {
+      result: { retval: xdr.ScVal.scvU64(new xdr.Uint64(3n)) },
+    };
     mockSimulate.mockResolvedValue(response);
     scValToNative.mockReturnValue(3n);
 
@@ -85,14 +88,16 @@ describe("FactoryClient", () => {
   });
 
   it("fetches all governors in pages of 20", async () => {
-    const responseCount = { result: { retval: xdr.ScVal.scvU64(22n) } };
+    const responseCount = {
+      result: { retval: xdr.ScVal.scvU64(new xdr.Uint64(22n)) },
+    };
     const responseEntry = { result: { retval: xdr.ScVal.scvMap([]) } };
     mockSimulate.mockResolvedValueOnce(responseCount);
     for (let i = 0; i < 22; i += 1) {
       mockSimulate.mockResolvedValueOnce(responseEntry);
     }
 
-    scValToNative.mockImplementation((raw) => {
+    scValToNative.mockImplementation((raw: unknown) => {
       if (typeof raw === "object" && raw?.toString?.() === "ScVal") {
         return { id: 1n, governor: "G1", timelock: "T1", token: "TO1", deployer: "D1" };
       }

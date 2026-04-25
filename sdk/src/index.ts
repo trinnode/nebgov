@@ -45,6 +45,8 @@ export {
   subscribeToProposalExpired,
   subscribeToGovernorUpgraded,
   subscribeToConfigUpdated,
+  subscribeToPauseEvents,
+  subscribeToUnpauseEvents,
 } from "./events";
 export type {
   SorobanEvent,
@@ -58,6 +60,8 @@ export type {
   ProposalExpiredEventData,
   GovernorUpgradedEventData,
   ConfigUpdatedEventData,
+  PauseEventData,
+  UnpauseEventData,
 } from "./events";
 export {
   parseProposalCreatedEvent,
@@ -69,5 +73,7 @@ export {
   parseProposalExpiredEvent,
   parseGovernorUpgradedEvent,
   parseConfigUpdatedEvent,
+  parsePauseEvent,
+  parseUnpauseEvent,
 } from "./events";
 export * from "./types";

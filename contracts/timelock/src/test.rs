@@ -1,8 +1,8 @@
 use super::*;
 use soroban_sdk::{
     contract, contractimpl,
-    testutils::{Address as _, Ledger as _},
-    Address, Bytes, Env, Symbol,
+    testutils::{Address as _, Events, Ledger as _},
+    Address, Bytes, Env, IntoVal, Symbol, TryIntoVal, Val, Vec,
 };
 
 /// Mock target contract for testing execution.
@@ -23,6 +23,71 @@ impl MockTarget {
             .get(&symbol_short!("executed"))
             .unwrap_or(false)
     }
+
+    pub fn store_i128(env: Env, value: i128) {
+        env.storage()
+            .persistent()
+            .set(&symbol_short!("value"), &value);
+    }
+
+    pub fn stored_value(env: Env) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&symbol_short!("value"))
+            .unwrap_or(0)
+    }
+}
+
+#[test]
+fn test_schedule_batch_returns_ids_and_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(TimelockContract, ());
+    let client = TimelockContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let governor = Address::generate(&env);
+    client.initialize(&admin, &governor, &1, &1_209_600);
+
+    let mut targets = Vec::new(&env);
+    targets.push_back(Address::generate(&env));
+    targets.push_back(Address::generate(&env));
+
+    let mut payloads = Vec::new(&env);
+    payloads.push_back(Bytes::from_array(&env, &[1u8, 2u8]));
+    payloads.push_back(Bytes::from_array(&env, &[3u8, 4u8]));
+
+    let mut fn_names = Vec::new(&env);
+    fn_names.push_back(Symbol::new(&env, "ping"));
+    fn_names.push_back(Symbol::new(&env, "pong"));
+
+    let mut predecessors = Vec::new(&env);
+    predecessors.push_back(Bytes::new(&env));
+    predecessors.push_back(Bytes::new(&env));
+
+    let mut salts = Vec::new(&env);
+    salts.push_back(Bytes::from_array(&env, &[9u8]));
+    salts.push_back(Bytes::from_array(&env, &[8u8]));
+
+    let ids = client.schedule_batch(
+        &governor,
+        &targets,
+        &payloads,
+        &fn_names,
+        &10,
+        &predecessors,
+        &salts,
+    );
+    assert_eq!(ids.len(), 2);
+
+    let events = env.events().all();
+    let has_batch_event = events.iter().any(|(_, topics, _)| {
+        topics.len() >= 1 && {
+            let first: Result<Symbol, _> = topics.get(0).unwrap().try_into_val(&env);
+            first.is_ok() && first.unwrap() == symbol_short!("schbatch")
+        }
+    });
+    assert!(has_batch_event, "schedule_batch event not emitted");
 }
 
 #[test]
@@ -84,7 +149,7 @@ fn test_schedule_with_predecessor_and_salt() {
     client.initialize(&admin, &governor, &0, &1_209_600);
 
     let target = Address::generate(&env);
-    let data = Bytes::from_slice(&env, b"calldata");
+    let data = Bytes::new(&env);
     let fn_name = Symbol::new(&env, "exec");
     let delay = 1000u64;
     let predecessor = Bytes::new(&env);
@@ -128,7 +193,7 @@ fn test_schedule_validates_predecessor() {
     client.initialize(&admin, &governor, &0, &1_209_600);
 
     let target = Address::generate(&env);
-    let data = Bytes::from_slice(&env, b"calldata");
+    let data = Bytes::new(&env);
     let fn_name = Symbol::new(&env, "exec");
     let delay = 1000u64;
     let non_existent_pred = Bytes::from_slice(&env, b"nonexistent");
@@ -159,7 +224,7 @@ fn test_is_done() {
     client.initialize(&admin, &governor, &0, &1_209_600);
 
     let target = env.register(MockTarget, ());
-    let data = Bytes::from_slice(&env, b"calldata");
+    let data = Bytes::new(&env);
     let fn_name = Symbol::new(&env, "exec");
     let delay = 1000u64;
 
@@ -202,7 +267,7 @@ fn test_predecessor_enforcement() {
     client.initialize(&admin, &governor, &0, &1_209_600); // 0 delay for speed
 
     let target = env.register(MockTarget, ());
-    let data = Bytes::from_slice(&env, b"calldata");
+    let data = Bytes::new(&env);
     let fn_name = Symbol::new(&env, "exec");
 
     // Schedule operation A
@@ -253,7 +318,7 @@ fn test_predecessor_blocking_when_ready() {
     client.initialize(&admin, &governor, &0, &1_209_600);
 
     let target = env.register(MockTarget, ());
-    let data = Bytes::from_slice(&env, b"calldata");
+    let data = Bytes::new(&env);
     let fn_name = Symbol::new(&env, "exec");
 
     // Schedule A and B with 0 delay (both ready immediately)
@@ -549,6 +614,39 @@ fn test_execution_deadline() {
 }
 
 #[test]
+fn test_execute_decodes_xdr_args() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(TimelockContract, ());
+    let client = TimelockContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let governor = Address::generate(&env);
+    client.initialize(&admin, &governor, &0, &1_209_600);
+
+    let target = env.register(MockTarget, ());
+    let mut args: Vec<Val> = Vec::new(&env);
+    args.push_back(42i128.into_val(&env));
+    let data = args.to_xdr(&env);
+
+    let op_id = client.schedule(
+        &governor,
+        &target,
+        &data,
+        &Symbol::new(&env, "store_i128"),
+        &0u64,
+        &Bytes::new(&env),
+        &Bytes::new(&env),
+    );
+
+    client.execute(&governor, &op_id);
+
+    let target_client = MockTargetClient::new(&env, &target);
+    assert_eq!(target_client.stored_value(), 42);
+}
+
+#[test]
 #[should_panic(expected = "Error(Contract, #3)")]
 /// Test that execution fails after deadline.
 fn test_execute_after_deadline_fails() {
@@ -598,16 +696,16 @@ fn test_execution_window_config() {
     let admin = Address::generate(&env);
     let governor = Address::generate(&env);
     let execution_window = 5000u64;
-    
+
     client.initialize(&admin, &governor, &100, &execution_window);
-    
+
     // Check getter returns correct value
     assert_eq!(client.execution_window(), execution_window);
-    
+
     // Update execution window
     let new_window = 10000u64;
     client.update_execution_window(&admin, &new_window);
-    
+
     // Check updated value
     assert_eq!(client.execution_window(), new_window);
 }
@@ -624,9 +722,9 @@ fn test_update_execution_window_unauthorized() {
     let admin = Address::generate(&env);
     let governor = Address::generate(&env);
     let unauthorized = Address::generate(&env);
-    
+
     client.initialize(&admin, &governor, &100, &1000);
-    
+
     // Should panic when unauthorized user tries to update
     client.update_execution_window(&unauthorized, &2000);
 }

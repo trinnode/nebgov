@@ -43,16 +43,33 @@ jobs:
             -p sorogov-timelock \
             -p sorogov-token-votes \
             -p sorogov-governor-factory \
-            -p sorogov-treasury
+            -p sorogov-treasury \
+            -p sorogov-liquidity
 
       - name: Run tests
-        run: cargo test --workspace
+        run: |
+          cargo test \
+            -p sorogov-governor \
+            -p sorogov-timelock \
+            -p sorogov-token-votes \
+            -p sorogov-governor-factory \
+            -p sorogov-liquidity \
+            -p sorogov-token-votes-wrapper
 
       - name: Install cargo-tarpaulin
         run: cargo install cargo-tarpaulin
 
       - name: Generate coverage
-        run: cargo tarpaulin --workspace --out xml --output-dir coverage/
+        run: |
+          cargo tarpaulin \
+            -p sorogov-governor \
+            -p sorogov-timelock \
+            -p sorogov-token-votes \
+            -p sorogov-governor-factory \
+            -p sorogov-liquidity \
+            -p sorogov-token-votes-wrapper \
+            --out xml \
+            --output-dir coverage/
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
@@ -95,7 +112,49 @@ jobs:
             -p sorogov-timelock \
             -p sorogov-token-votes \
             -p sorogov-governor-factory \
-            -p sorogov-treasury
+            -p sorogov-treasury \
+            -p sorogov-liquidity
+
+      - name: Check contract WASM sizes
+        run: |
+          shopt -s nullglob
+          files=(target/wasm32v1-none/release/*.wasm)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "ERROR: no WASM artifacts found"
+            exit 1
+          fi
+
+          fail=0
+          {
+            echo "## Contract WASM sizes"
+            echo
+            echo "| Contract | Size (bytes) | Size (KiB) | Status |"
+            echo "| --- | ---: | ---: | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          for wasm in "${files[@]}"; do
+            size=$(stat -c%s "$wasm")
+            name=$(basename "$wasm")
+            size_kib=$(awk "BEGIN { printf \"%.1f\", $size / 1024 }")
+            status="OK"
+
+            echo "$name: ${size} bytes"
+
+            if [ "$size" -gt 102400 ]; then
+              status="ERROR"
+              fail=1
+              echo "ERROR: $name exceeds 100KB limit (${size} bytes)"
+            elif [ "$size" -gt 81920 ]; then
+              status="WARNING"
+              echo "WARNING: $name is over 80KB (${size} bytes)"
+            fi
+
+            printf "| %s | %s | %s | %s |\n" "$name" "$size" "$size_kib" "$status" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+          if [ "$fail" -ne 0 ]; then
+            exit 1
+          fi
 
       - name: Upload WASM artifacts
         uses: actions/upload-artifact@v4

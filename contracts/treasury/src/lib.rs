@@ -1,9 +1,12 @@
 #![no_std]
 
-use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Bytes, Env, Vec,
-};
 use soroban_sdk::xdr::ToXdr;
+use soroban_sdk::{
+    contract, contractclient, contracterror, contractimpl, contracttype, symbol_short, token,
+    Address, Bytes, Env, Symbol, Vec,
+};
+
+const DEFAULT_PENDING_EXPIRY_LEDGERS: u32 = 17_280;
 
 /// Treasury error codes.
 #[contracterror]
@@ -103,7 +106,9 @@ impl TreasuryContract {
             max_single_transfer: i128::MAX,
             max_daily_transfer: i128::MAX,
         };
-        env.storage().instance().set(&DataKey::Settings, &default_settings);
+        env.storage()
+            .instance()
+            .set(&DataKey::Settings, &default_settings);
 
         // Initialize daily tracking: no spending yet, and day window starts now.
         env.storage().instance().set(&DataKey::DailySpent, &0i128);
@@ -195,9 +200,7 @@ impl TreasuryContract {
         // Check if 24 hours have elapsed; reset accumulator if so.
         let daily_spent: i128 = if now >= day_window_start + 86400 {
             // Day window has elapsed — reset and record new window start.
-            env.storage()
-                .instance()
-                .set(&DataKey::DayWindowStart, &now);
+            env.storage().instance().set(&DataKey::DayWindowStart, &now);
             env.storage().instance().set(&DataKey::DailySpent, &0i128);
             0i128
         } else {
@@ -226,7 +229,7 @@ impl TreasuryContract {
             .set(&DataKey::DailySpent, &new_daily_total);
 
         // Proceed with standard proposal submission logic.
-        Self::submit(env, proposer, target, data)
+        Self::submit(env, proposer, target, symbol_short!("transfer"), data)
     }
 
     /// Approve a pending transaction. Executes automatically when threshold reached.
@@ -510,9 +513,18 @@ mod tests {
         assert_eq!(tok.balance(&alice), 0);
 
         let mut recipients = Vec::new(&env);
-        recipients.push_back(BatchRecipient { recipient: alice.clone(), amount: 400 });
-        recipients.push_back(BatchRecipient { recipient: bob.clone(), amount: 350 });
-        recipients.push_back(BatchRecipient { recipient: charlie.clone(), amount: 250 });
+        recipients.push_back(BatchRecipient {
+            recipient: alice.clone(),
+            amount: 400,
+        });
+        recipients.push_back(BatchRecipient {
+            recipient: bob.clone(),
+            amount: 350,
+        });
+        recipients.push_back(BatchRecipient {
+            recipient: charlie.clone(),
+            amount: 250,
+        });
 
         let op_hash = client.batch_transfer(&governor, &token_addr, &recipients);
 
@@ -546,8 +558,14 @@ mod tests {
         // Second recipient has an invalid (zero) amount — the assert in Phase 1
         // fires before any transfer, so the entire batch is aborted.
         let mut recipients = Vec::new(&env);
-        recipients.push_back(BatchRecipient { recipient: alice.clone(), amount: 200 });
-        recipients.push_back(BatchRecipient { recipient: bob.clone(), amount: 0 });
+        recipients.push_back(BatchRecipient {
+            recipient: alice.clone(),
+            amount: 200,
+        });
+        recipients.push_back(BatchRecipient {
+            recipient: bob.clone(),
+            amount: 0,
+        });
 
         client.batch_transfer(&governor, &token_addr, &recipients);
     }
@@ -565,7 +583,10 @@ mod tests {
         let recipient = Address::generate(&env);
 
         let mut recipients = Vec::new(&env);
-        recipients.push_back(BatchRecipient { recipient, amount: 100 });
+        recipients.push_back(BatchRecipient {
+            recipient,
+            amount: 100,
+        });
 
         // Must panic — non-governor caller is rejected.
         client.batch_transfer(&unauthorized, &token_addr, &recipients);
@@ -597,7 +618,10 @@ mod tests {
 
         let recipient = Address::generate(&env);
         let mut recipients = Vec::new(&env);
-        recipients.push_back(BatchRecipient { recipient, amount: 500 });
+        recipients.push_back(BatchRecipient {
+            recipient,
+            amount: 500,
+        });
 
         client.batch_transfer(&governor, &token_addr, &recipients);
 
@@ -620,7 +644,10 @@ mod tests {
 
         let alice = Address::generate(&env);
         let mut recipients = Vec::new(&env);
-        recipients.push_back(BatchRecipient { recipient: alice.clone(), amount: 500 });
+        recipients.push_back(BatchRecipient {
+            recipient: alice.clone(),
+            amount: 500,
+        });
 
         let op_hash = client.batch_transfer(&governor, &token_addr, &recipients);
         assert_eq!(op_hash.len(), 32);
@@ -631,10 +658,16 @@ mod tests {
         sac_client.mint(&treasury_id, &500i128);
 
         let mut recipients2 = Vec::new(&env);
-        recipients2.push_back(BatchRecipient { recipient: alice.clone(), amount: 500 });
+        recipients2.push_back(BatchRecipient {
+            recipient: alice.clone(),
+            amount: 500,
+        });
         let op_hash2 = client.batch_transfer(&governor, &token_addr, &recipients2);
 
-        assert_ne!(op_hash, op_hash2, "hashes must differ across ledger sequences");
+        assert_ne!(
+            op_hash, op_hash2,
+            "hashes must differ across ledger sequences"
+        );
     }
 
     /// Gas-efficiency comparison: batch_transfer vs individual token transfers.
@@ -651,7 +684,6 @@ mod tests {
     fn test_batch_is_more_efficient_than_individual_transfers() {
         let env = Env::default();
         env.mock_all_auths();
-
 
         let (treasury_id, token_addr, governor) = setup(&env);
         let client = TreasuryContractClient::new(&env, &treasury_id);
@@ -732,7 +764,7 @@ mod tests {
 
         // Submit a proposal at the limit.
         let data = Bytes::new(&env);
-        let proposal_id = client.submit_with_limit(&owner, &target, &data, max_amount);
+        let proposal_id = client.submit_with_limit(&owner, &target, &data, &max_amount);
         assert_eq!(proposal_id, 1);
     }
 
@@ -755,12 +787,10 @@ mod tests {
             max_single_transfer: max_amount,
             max_daily_transfer: max_amount * 2,
         };
-        env.storage()
-            .instance()
-            .set(&DataKey::Settings, &settings);
+        env.storage().instance().set(&DataKey::Settings, &settings);
 
         let data = Bytes::new(&env);
-        let proposal_id = client.submit_with_limit(&owner, &target, &data, proposed_amount);
+        let proposal_id = client.submit_with_limit(&owner, &target, &data, &proposed_amount);
         assert_eq!(proposal_id, 1);
     }
 
@@ -784,9 +814,7 @@ mod tests {
             max_single_transfer: max_single,
             max_daily_transfer: max_daily,
         };
-        env.storage()
-            .instance()
-            .set(&DataKey::Settings, &settings);
+        env.storage().instance().set(&DataKey::Settings, &settings);
         env.storage()
             .instance()
             .set(&DataKey::DayWindowStart, &env.ledger().timestamp());
@@ -794,19 +822,23 @@ mod tests {
         let data = Bytes::new(&env);
 
         // First proposal: 800 (daily total = 800)
-        let id1 = client.submit_with_limit(&owner, &target, &data, proposal_amount);
+        let id1 = client.submit_with_limit(&owner, &target, &data, &proposal_amount);
         assert_eq!(id1, 1);
 
         // Second proposal: 800 (daily total = 1600)
-        let id2 = client.submit_with_limit(&owner, &target, &data, proposal_amount);
+        let id2 = client.submit_with_limit(&owner, &target, &data, &proposal_amount);
         assert_eq!(id2, 2);
 
         // Third proposal: 800 (daily total = 2400)
-        let id3 = client.submit_with_limit(&owner, &target, &data, proposal_amount);
+        let id3 = client.submit_with_limit(&owner, &target, &data, &proposal_amount);
         assert_eq!(id3, 3);
 
         // Verify accumulator is at 2400.
-        let daily_spent: i128 = env.storage().instance().get(&DataKey::DailySpent).unwrap_or(0);
+        let daily_spent: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::DailySpent)
+            .unwrap_or(0);
         assert_eq!(daily_spent, 2400i128);
     }
 
@@ -829,13 +861,10 @@ mod tests {
             max_single_transfer: i128::MAX,
             max_daily_transfer: max_daily,
         };
-        env.storage()
-            .instance()
-            .set(&DataKey::Settings, &settings);
+        env.storage().instance().set(&DataKey::Settings, &settings);
 
         let initial_time: u64 = 1000;
-        env.ledger()
-            .with_mut(|l| l.timestamp = initial_time);
+        env.ledger().with_mut(|l| l.timestamp = initial_time);
         env.storage()
             .instance()
             .set(&DataKey::DayWindowStart, &initial_time);
@@ -849,10 +878,11 @@ mod tests {
         let proposal_count_before = client.tx_count();
 
         // Advance time by 86400 seconds (24 hours) + 1 second.
-        env.ledger().with_mut(|l| l.timestamp = initial_time + 86401);
+        env.ledger()
+            .with_mut(|l| l.timestamp = initial_time + 86401);
 
         // Now submit: window has reset, so accumulator is 0, and 1 token should fit.
-        let proposal_id = client.submit_with_limit(&owner, &target, &data, test_amount);
+        let proposal_id = client.submit_with_limit(&owner, &target, &data, &test_amount);
         let proposal_count_after = client.tx_count();
 
         assert_eq!(proposal_count_after, proposal_count_before + 1);
@@ -879,15 +909,13 @@ mod tests {
             max_single_transfer: max_amount,
             max_daily_transfer: max_amount * 2,
         };
-        env.storage()
-            .instance()
-            .set(&DataKey::Settings, &settings);
+        env.storage().instance().set(&DataKey::Settings, &settings);
 
         let proposed_amount = max_amount + 1;
         let tx_count_before = client.tx_count();
 
         // This must panic.
-        client.submit_with_limit(&owner, &target, &data, proposed_amount);
+        client.submit_with_limit(&owner, &target, &data, &proposed_amount);
 
         // Verify state is unchanged.
         let tx_count_after = client.tx_count();
@@ -914,9 +942,7 @@ mod tests {
             max_single_transfer: i128::MAX,
             max_daily_transfer: max_daily,
         };
-        env.storage()
-            .instance()
-            .set(&DataKey::Settings, &settings);
+        env.storage().instance().set(&DataKey::Settings, &settings);
         env.storage()
             .instance()
             .set(&DataKey::DailySpent, &(max_daily - 100i128));
@@ -928,7 +954,7 @@ mod tests {
 
         // Try to submit 200 when only 100 is available in the daily budget.
         // This should panic and leave state unchanged.
-        client.submit_with_limit(&owner, &target, &data, 200i128);
+        client.submit_with_limit(&owner, &target, &data, &200i128);
 
         let tx_count_after = client.tx_count();
         assert_eq!(tx_count_after, tx_count_before);
@@ -951,18 +977,18 @@ mod tests {
             max_single_transfer: 1000i128,
             max_daily_transfer: 1000i128,
         };
-        env.storage()
-            .instance()
-            .set(&DataKey::Settings, &settings);
-        env.storage()
-            .instance()
-            .set(&DataKey::DailySpent, &0i128);
+        env.storage().instance().set(&DataKey::Settings, &settings);
+        env.storage().instance().set(&DataKey::DailySpent, &0i128);
 
-        let id = client.submit_with_limit(&owner, &target, &data, 0i128);
+        let id = client.submit_with_limit(&owner, &target, &data, &0i128);
         assert_eq!(id, 1);
 
         // Verify accumulator is still 0.
-        let daily_spent: i128 = env.storage().instance().get(&DataKey::DailySpent).unwrap_or(0);
+        let daily_spent: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::DailySpent)
+            .unwrap_or(0);
         assert_eq!(daily_spent, 0i128);
     }
 
@@ -985,19 +1011,19 @@ mod tests {
             max_single_transfer: limit,
             max_daily_transfer: limit,
         };
-        env.storage()
-            .instance()
-            .set(&DataKey::Settings, &settings);
-        env.storage()
-            .instance()
-            .set(&DataKey::DailySpent, &0i128);
+        env.storage().instance().set(&DataKey::Settings, &settings);
+        env.storage().instance().set(&DataKey::DailySpent, &0i128);
 
         // First transfer at the limit succeeds.
-        let id1 = client.submit_with_limit(&owner, &target, &data, limit);
+        let id1 = client.submit_with_limit(&owner, &target, &data, &limit);
         assert_eq!(id1, 1);
 
         // Accumulator is now at `limit`.
-        let daily_spent: i128 = env.storage().instance().get(&DataKey::DailySpent).unwrap_or(0);
+        let daily_spent: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::DailySpent)
+            .unwrap_or(0);
         assert_eq!(daily_spent, limit);
 
         // Second transfer at the limit must fail (daily total would be 2x the limit).
@@ -1022,17 +1048,20 @@ mod tests {
             max_single_transfer: i128::MAX,
             max_daily_transfer: i128::MAX,
         };
-        env.storage()
-            .instance()
-            .set(&DataKey::Settings, &settings);
+        env.storage().instance().set(&DataKey::Settings, &settings);
         env.storage()
             .instance()
             .set(&DataKey::DailySpent, &(i128::MAX - 100i128));
 
         // Submit a transfer of 50 — accumulator is i128::MAX - 50, which is valid.
-        let id = client.submit_with_limit(&owner, &target, &data, 50i128);
+        let id = client.submit_with_limit(&owner, &target, &data, &50i128);
         assert_eq!(id, 1);
 
-        let daily_spent: i128 = env.storage().instance().get(&DataKey::DailySpent).unwrap_or(0);
+        let daily_spent: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::DailySpent)
+            .unwrap_or(0);
         assert_eq!(daily_spent, i128::MAX - 50i128);
     }
+}

@@ -8,9 +8,16 @@
 //! - Edge: voting_delay = 0
 
 #![no_main]
+use std::vec::Vec;
+
 use libfuzzer_sys::fuzz_target;
-use soroban_sdk::{testutils::Address as _, Address, Env, Vec};
-use sorogov_governor::{GovernorContract, GovernorContractClient, ProposalState, VoteSupport};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger as _},
+    Address, Bytes, Env, String, Symbol, Vec as SorobanVec,
+};
+use sorogov_governor::{
+    GovernorContract, GovernorContractClient, ProposalState, VoteSupport, VoteType,
+};
 
 /// Fuzz input structure for governor state machine testing.
 #[derive(Debug, arbitrary::Arbitrary)]
@@ -41,10 +48,11 @@ fuzz_target!(|input: FuzzInput| {
     let admin = Address::generate(&env);
     let votes_token = Address::generate(&env);
     let timelock = Address::generate(&env);
-    
+
     let governor_id = env.register(GovernorContract, ());
     let client = GovernorContractClient::new(&env, &governor_id);
-    
+    let guardian = Address::generate(&env);
+
     client.initialize(
         &admin,
         &votes_token,
@@ -53,18 +61,34 @@ fuzz_target!(|input: FuzzInput| {
         &input.voting_period,
         &input.quorum_numerator,
         &input.proposal_threshold,
+        &guardian,
+        &VoteType::Extended,
+        &0u32,
     );
 
     // Create proposals
-    let mut proposal_ids = Vec::new(&env);
+    let mut proposal_ids = SorobanVec::new(&env);
     for i in 0..input.num_proposals.min(10) {
         let proposer = Address::generate(&env);
-        let description = soroban_sdk::String::from_str(&env, "Test proposal");
-        let targets = Vec::from_array(&env, [Address::generate(&env)]);
-        let fn_names = Vec::from_array(&env, [soroban_sdk::Symbol::new(&env, "test")]);
-        let calldatas = Vec::from_array(&env, [soroban_sdk::Bytes::new(&env)]);
-        
-        let proposal_id = client.propose(&proposer, &description, &targets, &fn_names, &calldatas);
+        let description = String::from_str(&env, "Test proposal");
+        let description_hash = env
+            .crypto()
+            .sha256(&Bytes::from_slice(&env, b"Test proposal"))
+            .into();
+        let metadata_uri = String::from_str(&env, "ipfs://fuzz-governor-state");
+        let targets = SorobanVec::from_array(&env, [Address::generate(&env)]);
+        let fn_names = SorobanVec::from_array(&env, [Symbol::new(&env, "test")]);
+        let calldatas = SorobanVec::from_array(&env, [Bytes::new(&env)]);
+
+        let proposal_id = client.propose(
+            &proposer,
+            &description,
+            &description_hash,
+            &metadata_uri,
+            &targets,
+            &fn_names,
+            &calldatas,
+        );
         proposal_ids.push_back(proposal_id);
     }
 
@@ -73,9 +97,9 @@ fuzz_target!(|input: FuzzInput| {
         if i >= proposal_ids.len() as usize {
             break;
         }
-        
+
         let proposal_id = proposal_ids.get(i as u32).unwrap();
-        
+
         // Advance ledger
         env.ledger().with_mut(|l| {
             l.sequence_number = l.sequence_number.saturating_add(advance);
@@ -83,25 +107,25 @@ fuzz_target!(|input: FuzzInput| {
 
         // Get proposal state
         let state = client.state(&proposal_id);
-        
+
         // Vote if proposal is active
         if state == ProposalState::Active {
             let voter = Address::generate(&env);
-            let votes_for = input.votes_for.get(i as u32).unwrap_or(&0);
-            let votes_against = input.votes_against.get(i as u32).unwrap_or(&0);
-            
+            let votes_for = input.votes_for.get(i).copied().unwrap_or(0);
+            let votes_against = input.votes_against.get(i).copied().unwrap_or(0);
+
             // Vote for
-            if *votes_for > 0 {
+            if votes_for > 0 {
                 client.cast_vote(&voter, &proposal_id, &VoteSupport::For);
             }
-            
+
             // Vote against
-            if *votes_against > 0 {
+            if votes_against > 0 {
                 let voter2 = Address::generate(&env);
                 client.cast_vote(&voter2, &proposal_id, &VoteSupport::Against);
             }
         }
-        
+
         // Verify state transitions are valid
         let final_state = client.state(&proposal_id);
         assert!(

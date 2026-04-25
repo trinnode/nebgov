@@ -17,15 +17,11 @@ use sorogov_token_votes::{TokenVotesContract, TokenVotesContractClient};
 
 // Import the WASM binaries for the contracts we want to deploy.
 mod wasm {
-    soroban_sdk::contractimport!(
-        file = "../../target/wasm32v1-none/release/sorogov_governor.wasm"
-    );
+    soroban_sdk::contractimport!(file = "../../target/wasm32v1-none/release/sorogov_governor.wasm");
 }
 
 mod timelock_wasm {
-    soroban_sdk::contractimport!(
-        file = "../../target/wasm32v1-none/release/sorogov_timelock.wasm"
-    );
+    soroban_sdk::contractimport!(file = "../../target/wasm32v1-none/release/sorogov_timelock.wasm");
 }
 
 mod token_votes_wasm {
@@ -74,7 +70,7 @@ fn upload_wasms(env: &Env) -> (BytesN<32>, BytesN<32>, BytesN<32>) {
 #[test]
 fn factory_deploy_produces_working_governor() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
 
     // ------------------------------------------------------------------
     // 1. Setup: Register contracts and upload WASMs
@@ -113,6 +109,9 @@ fn factory_deploy_produces_working_governor() {
     let quorum_numerator = 0u32; // Simple majority test
     let proposal_threshold = 0i128;
     let timelock_delay = 1u64; // 1 second for fast testing
+    let guardian = admin.clone();
+    let vote_type = 1u32;
+    let proposal_grace_period = 120_960u32;
 
     let deploy_id = factory.deploy(
         &deployer,
@@ -122,6 +121,9 @@ fn factory_deploy_produces_working_governor() {
         &quorum_numerator,
         &proposal_threshold,
         &timelock_delay,
+        &guardian,
+        &vote_type,
+        &proposal_grace_period,
     );
 
     // ------------------------------------------------------------------
@@ -129,19 +131,41 @@ fn factory_deploy_produces_working_governor() {
     // ------------------------------------------------------------------
 
     assert_eq!(deploy_id, 1, "first deployment should have ID 1");
-    assert_eq!(factory.governor_count(), 1, "factory should track one deployment");
+    assert_eq!(
+        factory.governor_count(),
+        1,
+        "factory should track one deployment"
+    );
 
     let entry = factory.get_governor(&deploy_id);
     assert_eq!(entry.id, deploy_id);
     assert_eq!(entry.deployer, deployer);
 
     // All addresses must be distinct and non-zero (not the factory address)
-    assert_ne!(entry.governor, factory_id, "governor address must not be factory");
-    assert_ne!(entry.timelock, factory_id, "timelock address must not be factory");
-    assert_ne!(entry.token, factory_id, "token-votes address must not be factory");
-    assert_ne!(entry.governor, entry.timelock, "governor and timelock must be distinct");
-    assert_ne!(entry.governor, entry.token, "governor and token-votes must be distinct");
-    assert_ne!(entry.timelock, entry.token, "timelock and token-votes must be distinct");
+    assert_ne!(
+        entry.governor, factory_id,
+        "governor address must not be factory"
+    );
+    assert_ne!(
+        entry.timelock, factory_id,
+        "timelock address must not be factory"
+    );
+    assert_ne!(
+        entry.token, factory_id,
+        "token-votes address must not be factory"
+    );
+    assert_ne!(
+        entry.governor, entry.timelock,
+        "governor and timelock must be distinct"
+    );
+    assert_ne!(
+        entry.governor, entry.token,
+        "governor and token-votes must be distinct"
+    );
+    assert_ne!(
+        entry.timelock, entry.token,
+        "timelock and token-votes must be distinct"
+    );
 
     // ------------------------------------------------------------------
     // 5. Verify governor is initialized correctly
@@ -157,15 +181,27 @@ fn factory_deploy_produces_working_governor() {
     // ------------------------------------------------------------------
 
     let timelock_client = TimelockContractClient::new(&env, &entry.timelock);
-    assert_eq!(timelock_client.min_delay(), timelock_delay, "timelock delay must match");
-    assert_eq!(timelock_client.governor(), entry.governor, "timelock must reference governor");
+    assert_eq!(
+        timelock_client.min_delay(),
+        timelock_delay,
+        "timelock delay must match"
+    );
+    assert_eq!(
+        timelock_client.governor(),
+        entry.governor,
+        "timelock must reference governor"
+    );
 
     // ------------------------------------------------------------------
     // 7. Verify token-votes is initialized correctly
     // ------------------------------------------------------------------
 
     let votes_client = TokenVotesContractClient::new(&env, &entry.token);
-    assert_eq!(votes_client.token(), token_addr, "token-votes must reference underlying token");
+    assert_eq!(
+        votes_client.token(),
+        token_addr,
+        "token-votes must reference underlying token"
+    );
 
     // ------------------------------------------------------------------
     // 8. Run full proposal lifecycle through factory-deployed governor
@@ -188,8 +224,13 @@ fn factory_deploy_produces_working_governor() {
     // Create proposal
     let proposer = Address::generate(&env);
     let fn_name = Symbol::new(&env, "exec_gov");
-    let calldata = Bytes::from_slice(&env, b"factory-test-proposal");
+    let calldata = Bytes::new(&env);
     let description = soroban_sdk::String::from_str(&env, "Test factory-deployed governor");
+    let description_hash = env
+        .crypto()
+        .sha256(&Bytes::from_slice(&env, b"factory-test-proposal"))
+        .into();
+    let metadata_uri = soroban_sdk::String::from_str(&env, "ipfs://factory-test-proposal");
 
     let mut targets = soroban_sdk::Vec::new(&env);
     targets.push_back(mock_target_id.clone());
@@ -200,7 +241,15 @@ fn factory_deploy_produces_working_governor() {
     let mut calldatas = soroban_sdk::Vec::new(&env);
     calldatas.push_back(calldata);
 
-    let proposal_id = governor_client.propose(&proposer, &description, &targets, &fn_names, &calldatas);
+    let proposal_id = governor_client.propose(
+        &proposer,
+        &description,
+        &description_hash,
+        &metadata_uri,
+        &targets,
+        &fn_names,
+        &calldatas,
+    );
     assert_eq!(proposal_id, 1, "first proposal should have ID 1");
     assert_eq!(governor_client.state(&proposal_id), ProposalState::Pending);
 
@@ -219,7 +268,10 @@ fn factory_deploy_produces_working_governor() {
 
     // Advance past voting period
     env.ledger().with_mut(|l| l.sequence_number = 31);
-    assert_eq!(governor_client.state(&proposal_id), ProposalState::Succeeded);
+    assert_eq!(
+        governor_client.state(&proposal_id),
+        ProposalState::Succeeded
+    );
 
     // Queue proposal
     let ts_before_queue = env.ledger().timestamp();
@@ -227,12 +279,19 @@ fn factory_deploy_produces_working_governor() {
     assert_eq!(governor_client.state(&proposal_id), ProposalState::Queued);
 
     // Advance time past timelock delay
-    env.ledger().with_mut(|l| l.timestamp = ts_before_queue + timelock_delay + 1);
+    env.ledger()
+        .with_mut(|l| l.timestamp = ts_before_queue + timelock_delay + 1);
 
     // Execute proposal
-    assert!(!mock_client.was_called(), "target should not be called before execute");
+    assert!(
+        !mock_client.was_called(),
+        "target should not be called before execute"
+    );
     governor_client.execute(&proposal_id);
-    assert!(mock_client.was_called(), "target should be called after execute");
+    assert!(
+        mock_client.was_called(),
+        "target should be called after execute"
+    );
     assert_eq!(governor_client.state(&proposal_id), ProposalState::Executed);
 }
 
@@ -243,7 +302,7 @@ fn factory_deploy_produces_working_governor() {
 #[test]
 fn test_get_governor_returns_correct_addresses() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
 
     env.register(GovernorContract, ());
     env.register(TimelockContract, ());
@@ -254,6 +313,9 @@ fn test_get_governor_returns_correct_addresses() {
     let admin = Address::generate(&env);
     let deployer = Address::generate(&env);
     let token = Address::generate(&env);
+    let guardian = admin.clone();
+    let vote_type = 1u32;
+    let proposal_grace_period = 120_960u32;
 
     let factory_id = env.register(GovernorFactoryContract, ());
     let factory = GovernorFactoryContractClient::new(&env, &factory_id);
@@ -261,7 +323,18 @@ fn test_get_governor_returns_correct_addresses() {
     factory.initialize(&admin, &governor_hash, &timelock_hash, &token_votes_hash);
 
     // Deploy first governance stack
-    let id1 = factory.deploy(&deployer, &token, &100u32, &1000u32, &50u32, &0i128, &3600u64);
+    let id1 = factory.deploy(
+        &deployer,
+        &token,
+        &100u32,
+        &1000u32,
+        &50u32,
+        &0i128,
+        &3600u64,
+        &guardian,
+        &vote_type,
+        &proposal_grace_period,
+    );
 
     // Retrieve and verify
     let entry1 = factory.get_governor(&id1);
@@ -269,14 +342,31 @@ fn test_get_governor_returns_correct_addresses() {
     assert_eq!(entry1.deployer, deployer);
 
     // Deploy second governance stack
-    let id2 = factory.deploy(&deployer, &token, &200u32, &2000u32, &40u32, &0i128, &7200u64);
+    let id2 = factory.deploy(
+        &deployer,
+        &token,
+        &200u32,
+        &2000u32,
+        &40u32,
+        &0i128,
+        &7200u64,
+        &guardian,
+        &vote_type,
+        &proposal_grace_period,
+    );
 
     // Retrieve both and verify they're distinct
     let entry2 = factory.get_governor(&id2);
     assert_eq!(entry2.id, id2);
 
-    assert_ne!(entry1.governor, entry2.governor, "governors must be distinct");
-    assert_ne!(entry1.timelock, entry2.timelock, "timelocks must be distinct");
+    assert_ne!(
+        entry1.governor, entry2.governor,
+        "governors must be distinct"
+    );
+    assert_ne!(
+        entry1.timelock, entry2.timelock,
+        "timelocks must be distinct"
+    );
     assert_ne!(entry1.token, entry2.token, "token-votes must be distinct");
 }
 
@@ -287,7 +377,7 @@ fn test_get_governor_returns_correct_addresses() {
 #[test]
 fn test_factory_emits_deployment_event() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
 
     env.register(GovernorContract, ());
     env.register(TimelockContract, ());
@@ -298,6 +388,9 @@ fn test_factory_emits_deployment_event() {
     let admin = Address::generate(&env);
     let deployer = Address::generate(&env);
     let token = Address::generate(&env);
+    let guardian = admin.clone();
+    let vote_type = 1u32;
+    let proposal_grace_period = 120_960u32;
 
     let factory_id = env.register(GovernorFactoryContract, ());
     let factory = GovernorFactoryContractClient::new(&env, &factory_id);
@@ -308,7 +401,18 @@ fn test_factory_emits_deployment_event() {
     let events_before = env.events().all().len();
 
     // Deploy and capture events
-    factory.deploy(&deployer, &token, &100u32, &1000u32, &50u32, &0i128, &3600u64);
+    factory.deploy(
+        &deployer,
+        &token,
+        &100u32,
+        &1000u32,
+        &50u32,
+        &0i128,
+        &3600u64,
+        &guardian,
+        &vote_type,
+        &proposal_grace_period,
+    );
 
     // Verify at least one event was emitted during deployment
     let events_after = env.events().all().len();
@@ -325,7 +429,7 @@ fn test_factory_emits_deployment_event() {
 #[test]
 fn test_deterministic_address_prediction() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
 
     env.register(GovernorContract, ());
     env.register(TimelockContract, ());
@@ -336,6 +440,9 @@ fn test_deterministic_address_prediction() {
     let admin = Address::generate(&env);
     let deployer = Address::generate(&env);
     let token = Address::generate(&env);
+    let guardian = admin.clone();
+    let vote_type = 1u32;
+    let proposal_grace_period = 120_960u32;
 
     let factory_id = env.register(GovernorFactoryContract, ());
     let factory = GovernorFactoryContractClient::new(&env, &factory_id);
@@ -343,7 +450,18 @@ fn test_deterministic_address_prediction() {
     factory.initialize(&admin, &governor_hash, &timelock_hash, &token_votes_hash);
 
     // Deploy first stack
-    let id1 = factory.deploy(&deployer, &token, &100u32, &1000u32, &50u32, &0i128, &3600u64);
+    let id1 = factory.deploy(
+        &deployer,
+        &token,
+        &100u32,
+        &1000u32,
+        &50u32,
+        &0i128,
+        &3600u64,
+        &guardian,
+        &vote_type,
+        &proposal_grace_period,
+    );
     let entry1 = factory.get_governor(&id1);
 
     // Manually compute expected addresses using the same salt logic
@@ -353,27 +471,39 @@ fn test_deterministic_address_prediction() {
 
     // Token-Votes (salt suffix 1)
     salt_bin[31] = 1;
-    let expected_token_votes = env
-        .deployer()
-        .with_current_contract(BytesN::from_array(&env, &salt_bin))
-        .deployed_address();
+    let expected_token_votes = env.as_contract(&factory_id, || {
+        env.deployer()
+            .with_current_contract(BytesN::from_array(&env, &salt_bin))
+            .deployed_address()
+    });
 
     // Timelock (salt suffix 2)
     salt_bin[31] = 2;
-    let expected_timelock = env
-        .deployer()
-        .with_current_contract(BytesN::from_array(&env, &salt_bin))
-        .deployed_address();
+    let expected_timelock = env.as_contract(&factory_id, || {
+        env.deployer()
+            .with_current_contract(BytesN::from_array(&env, &salt_bin))
+            .deployed_address()
+    });
 
     // Governor (salt suffix 3)
     salt_bin[31] = 3;
-    let expected_governor = env
-        .deployer()
-        .with_current_contract(BytesN::from_array(&env, &salt_bin))
-        .deployed_address();
+    let expected_governor = env.as_contract(&factory_id, || {
+        env.deployer()
+            .with_current_contract(BytesN::from_array(&env, &salt_bin))
+            .deployed_address()
+    });
 
     // Verify addresses match predictions
-    assert_eq!(entry1.token, expected_token_votes, "token-votes address must be deterministic");
-    assert_eq!(entry1.timelock, expected_timelock, "timelock address must be deterministic");
-    assert_eq!(entry1.governor, expected_governor, "governor address must be deterministic");
+    assert_eq!(
+        entry1.token, expected_token_votes,
+        "token-votes address must be deterministic"
+    );
+    assert_eq!(
+        entry1.timelock, expected_timelock,
+        "timelock address must be deterministic"
+    );
+    assert_eq!(
+        entry1.governor, expected_governor,
+        "governor address must be deterministic"
+    );
 }

@@ -1,230 +1,285 @@
 import {
+  extractContractErrorCode,
   GovernorError,
   GovernorErrorCode,
-  TimelockError,
-  TimelockErrorCode,
-  VotesError,
-  VotesErrorCode,
   parseGovernorError,
   parseTimelockError,
+  parseTreasuryError,
   parseVotesError,
-  extractContractErrorCode,
   SorobanRpcError,
+  TimelockError,
+  TimelockErrorCode,
+  TreasuryError,
+  TreasuryErrorCode,
+  VotesError,
+  VotesErrorCode,
 } from "../errors";
 
-// ─── extractContractErrorCode ────────────────────────────────────────────────
+function numericEnumValues<T extends Record<string, string | number>>(
+  value: T,
+): number[] {
+  return Object.values(value).filter(
+    (entry): entry is number => typeof entry === "number",
+  );
+}
 
-describe("extractContractErrorCode()", () => {
-  it('parses "Error(Contract, #1)" format', () => {
-    expect(extractContractErrorCode({ error: "Error(Contract, #1)" })).toBe(1);
+describe("extractContractErrorCode", () => {
+  it("parses Error(Contract, #N) format", () => {
+    expect(extractContractErrorCode("Error(Contract, #3)")).toBe(3);
+    expect(extractContractErrorCode({ error: "Error(Contract, #27)" })).toBe(27);
   });
 
-  it('parses "Error(Contract, #3)" with a space', () => {
-    expect(extractContractErrorCode({ error: "Error(Contract, #3)" })).toBe(3);
-  });
-
-  it('parses "ContractError(2)" format', () => {
+  it("parses ContractError(N) format", () => {
     expect(
-      extractContractErrorCode({ error: "HostError: Value(ContractError(2))" })
-    ).toBe(2);
+      extractContractErrorCode({
+        error: "HostError: Value(ContractError(3))",
+      }),
+    ).toBe(3);
   });
 
-  it('parses "contract error: #5" case-insensitively', () => {
-    expect(extractContractErrorCode({ error: "contract error: #5" })).toBe(5);
+  it("parses legacy contract error format", () => {
+    expect(extractContractErrorCode({ error: "contract error: #12" })).toBe(12);
   });
 
-  it("returns null when error string has no contract code", () => {
-    expect(extractContractErrorCode({ error: "RPC timeout" })).toBeNull();
+  it("returns null for non-contract errors", () => {
+    expect(extractContractErrorCode("some random RPC error")).toBeNull();
+    expect(extractContractErrorCode({ error: "ledger not found" })).toBeNull();
   });
 
-  it("returns null when error is undefined", () => {
+  it("returns null for network errors", () => {
+    expect(extractContractErrorCode({ error: "fetch failed" })).toBeNull();
+    expect(extractContractErrorCode({ status: "ERROR", error: "ECONNRESET" })).toBeNull();
+  });
+
+  it("returns null for nullish, empty, and non-string inputs", () => {
+    expect(extractContractErrorCode(null)).toBeNull();
+    expect(extractContractErrorCode(undefined)).toBeNull();
+    expect(extractContractErrorCode("")).toBeNull();
     expect(extractContractErrorCode({})).toBeNull();
-  });
-
-  it("parses multi-digit codes", () => {
     expect(
-      extractContractErrorCode({ error: "Error(Contract, #12)" })
-    ).toBe(12);
+      extractContractErrorCode({ error: 123 as unknown as string }),
+    ).toBeNull();
   });
 });
-
-// ─── GovernorError ────────────────────────────────────────────────────────────
 
 describe("GovernorError", () => {
-  it("has the correct name", () => {
-    const err = new GovernorError(GovernorErrorCode.ProposalExpired, "expired");
-    expect(err.name).toBe("GovernorError");
-  });
+  it("preserves name, code, cause, and Error inheritance", () => {
+    const cause = new Error("root cause");
+    const err = new GovernorError(
+      GovernorErrorCode.UnauthorizedCancel,
+      "Unauthorized",
+      cause,
+    );
 
-  it("is an instance of Error", () => {
-    const err = new GovernorError(GovernorErrorCode.ProposalExpired, "expired");
     expect(err).toBeInstanceOf(Error);
     expect(err).toBeInstanceOf(GovernorError);
-  });
-
-  it("stores the code", () => {
-    const err = new GovernorError(GovernorErrorCode.UnauthorizedCancel, "msg");
+    expect(err.name).toBe("GovernorError");
     expect(err.code).toBe(GovernorErrorCode.UnauthorizedCancel);
-  });
-
-  it("stores the cause", () => {
-    const cause = new Error("root cause");
-    const err = new GovernorError(GovernorErrorCode.SimulationFailed, "msg", cause);
     expect(err.cause).toBe(cause);
   });
-});
 
-// ─── TimelockError ────────────────────────────────────────────────────────────
-
-describe("TimelockError", () => {
-  it("has the correct name", () => {
-    const err = new TimelockError(TimelockErrorCode.OperationExpired, "expired");
-    expect(err.name).toBe("TimelockError");
-  });
-
-  it("is an instance of Error", () => {
-    const err = new TimelockError(TimelockErrorCode.OperationExpired, "expired");
-    expect(err).toBeInstanceOf(Error);
-    expect(err).toBeInstanceOf(TimelockError);
-  });
-
-  it("stores the code", () => {
-    const err = new TimelockError(TimelockErrorCode.PredecessorNotDone, "msg");
-    expect(err.code).toBe(TimelockErrorCode.PredecessorNotDone);
+  it.each(
+    numericEnumValues(GovernorErrorCode),
+  )("covers GovernorErrorCode value %i", (code) => {
+    const err = new GovernorError(code as GovernorErrorCode, `message-${code}`);
+    expect(err.code).toBe(code);
+    expect(err.message).toBe(`message-${code}`);
   });
 });
 
-// ─── VotesError ───────────────────────────────────────────────────────────────
+describe("parseGovernorError", () => {
+  const contractCodes = numericEnumValues(GovernorErrorCode).filter(
+    (code) => code < 100,
+  );
 
-describe("VotesError", () => {
-  it("has the correct name", () => {
-    const err = new VotesError(VotesErrorCode.DelegationFailed, "failed");
-    expect(err.name).toBe("VotesError");
-  });
-
-  it("is an instance of Error", () => {
-    const err = new VotesError(VotesErrorCode.DelegationFailed, "failed");
-    expect(err).toBeInstanceOf(Error);
-    expect(err).toBeInstanceOf(VotesError);
-  });
-});
-
-// ─── parseGovernorError ───────────────────────────────────────────────────────
-
-describe("parseGovernorError()", () => {
-  it("maps contract error #1 → UnauthorizedCancel with descriptive message", () => {
-    const raw: SorobanRpcError = { error: "Error(Contract, #1)" };
-    const err = parseGovernorError(raw);
+  it("returns typed GovernorError for known codes", () => {
+    const err = parseGovernorError({ error: "Error(Contract, #1)" });
     expect(err).toBeInstanceOf(GovernorError);
     expect(err.code).toBe(GovernorErrorCode.UnauthorizedCancel);
     expect(err.message).toContain("proposer or guardian");
   });
 
-  it("maps contract error #2 → InvalidSupport with descriptive message", () => {
-    const raw: SorobanRpcError = { error: "Error(Contract, #2)" };
-    const err = parseGovernorError(raw);
-    expect(err.code).toBe(GovernorErrorCode.InvalidSupport);
-    expect(err.message).toContain("abstain");
+  it.each(contractCodes)("handles GovernorErrorCode contract value %i", (code) => {
+    const err = parseGovernorError({ error: `Error(Contract, #${code})` });
+    expect(err).toBeInstanceOf(GovernorError);
+    expect(err.code).toBe(code);
+    expect(err.message.length).toBeGreaterThan(0);
   });
 
-  it("maps contract error #3 → ProposalExpired with descriptive message", () => {
-    const raw: SorobanRpcError = { error: "Error(Contract, #3)" };
-    const err = parseGovernorError(raw);
-    expect(err.code).toBe(GovernorErrorCode.ProposalExpired);
-    expect(err.message).toContain("expired");
+  it("does not throw for unknown codes", () => {
+    expect(() =>
+      parseGovernorError({ error: "Error(Contract, #999)" }),
+    ).not.toThrow();
+
+    const err = parseGovernorError({ error: "Error(Contract, #999)" });
+    expect(err).toBeInstanceOf(GovernorError);
+    expect(err.code).toBe(999 as GovernorErrorCode);
+    expect(err.message).toBe("Governor contract error #999");
   });
 
-  it("maps unknown contract error codes with a fallback message", () => {
-    const raw: SorobanRpcError = { error: "Error(Contract, #99)" };
-    const err = parseGovernorError(raw);
-    expect(err.code).toBe(99 as GovernorErrorCode);
-    expect(err.message).toContain("Governor contract error #99");
-  });
-
-  it('maps status="ERROR" without contract code → TransactionFailed', () => {
-    const raw: SorobanRpcError = { status: "ERROR", error: "network timeout" };
-    const err = parseGovernorError(raw);
+  it("maps transport failures to TransactionFailed", () => {
+    const err = parseGovernorError({
+      status: "ERROR",
+      error: "network timeout",
+    });
     expect(err.code).toBe(GovernorErrorCode.TransactionFailed);
     expect(err.message).toContain("Transaction failed");
     expect(err.message).toContain("network timeout");
   });
 
-  it("maps simulation failure → SimulationFailed", () => {
-    const raw: SorobanRpcError = { error: "simulation error" };
-    const err = parseGovernorError(raw);
+  it("maps other failures to SimulationFailed", () => {
+    const err = parseGovernorError({
+      error: "simulate failed",
+    });
     expect(err.code).toBe(GovernorErrorCode.SimulationFailed);
     expect(err.message).toContain("Simulation failed");
   });
 
-  it("forwards the cause argument", () => {
-    const cause = new Error("root");
-    const raw: SorobanRpcError = { status: "ERROR", error: "rejected" };
-    const err = parseGovernorError(raw, cause);
-    expect(err.cause).toBe(cause);
+  it("handles nullish and malformed inputs without throwing", () => {
+    expect(parseGovernorError(null).code).toBe(
+      GovernorErrorCode.SimulationFailed,
+    );
+    expect(parseGovernorError(undefined).code).toBe(
+      GovernorErrorCode.SimulationFailed,
+    );
+    expect(
+      parseGovernorError({ error: 42 as unknown as string }).code,
+    ).toBe(GovernorErrorCode.SimulationFailed);
   });
 });
 
-// ─── parseTimelockError ───────────────────────────────────────────────────────
-
-describe("parseTimelockError()", () => {
-  it("maps contract error #1 → PredecessorNotDone", () => {
-    const raw: SorobanRpcError = { error: "Error(Contract, #1)" };
-    const err = parseTimelockError(raw);
+describe("TimelockError", () => {
+  it("preserves name and Error inheritance", () => {
+    const err = new TimelockError(
+      TimelockErrorCode.OperationExpired,
+      "expired",
+    );
+    expect(err).toBeInstanceOf(Error);
     expect(err).toBeInstanceOf(TimelockError);
-    expect(err.code).toBe(TimelockErrorCode.PredecessorNotDone);
-    expect(err.message).toContain("predecessor");
+    expect(err.name).toBe("TimelockError");
   });
 
-  it("maps contract error #2 → PredecessorNotFound", () => {
-    const raw: SorobanRpcError = { error: "Error(Contract, #2)" };
-    const err = parseTimelockError(raw);
-    expect(err.code).toBe(TimelockErrorCode.PredecessorNotFound);
+  it.each(
+    numericEnumValues(TimelockErrorCode),
+  )("covers TimelockErrorCode value %i", (code) => {
+    const err = new TimelockError(code as TimelockErrorCode, `message-${code}`);
+    expect(err.code).toBe(code);
+  });
+});
+
+describe("parseTimelockError", () => {
+  const contractCodes = numericEnumValues(TimelockErrorCode).filter(
+    (code) => code < 100,
+  );
+
+  it.each(contractCodes)("handles TimelockErrorCode contract value %i", (code) => {
+    const err = parseTimelockError({ error: `Error(Contract, #${code})` });
+    expect(err).toBeInstanceOf(TimelockError);
+    expect(err.code).toBe(code);
+    expect(err.message.length).toBeGreaterThan(0);
   });
 
-  it("maps contract error #3 → OperationExpired", () => {
-    const raw: SorobanRpcError = { error: "Error(Contract, #3)" };
-    const err = parseTimelockError(raw);
-    expect(err.code).toBe(TimelockErrorCode.OperationExpired);
-    expect(err.message).toContain("expired");
-  });
-
-  it('maps status="ERROR" → TransactionFailed', () => {
-    const raw: SorobanRpcError = { status: "ERROR", error: "rejected" };
-    const err = parseTimelockError(raw);
+  it("maps transaction failures", () => {
+    const err = parseTimelockError({ status: "ERROR", error: "rejected" });
     expect(err.code).toBe(TimelockErrorCode.TransactionFailed);
     expect(err.message).toContain("Transaction failed");
   });
 
-  it("maps simulation failure → SimulationFailed", () => {
-    const raw: SorobanRpcError = { error: "ledger not found" };
-    const err = parseTimelockError(raw);
+  it("maps simulation failures", () => {
+    const err = parseTimelockError({ error: "simulation rejected" });
     expect(err.code).toBe(TimelockErrorCode.SimulationFailed);
   });
 });
 
-// ─── parseVotesError ──────────────────────────────────────────────────────────
+describe("TreasuryError", () => {
+  it("preserves name and Error inheritance", () => {
+    const err = new TreasuryError(
+      TreasuryErrorCode.SingleTransferExceeded,
+      "too much",
+    );
+    expect(err).toBeInstanceOf(Error);
+    expect(err).toBeInstanceOf(TreasuryError);
+    expect(err.name).toBe("TreasuryError");
+  });
 
-describe("parseVotesError()", () => {
-  it('maps status="ERROR" → TransactionFailed', () => {
-    const raw: SorobanRpcError = { status: "ERROR", error: "insufficient fee" };
-    const err = parseVotesError(raw);
+  it.each(
+    numericEnumValues(TreasuryErrorCode),
+  )("covers TreasuryErrorCode value %i", (code) => {
+    const err = new TreasuryError(code as TreasuryErrorCode, `message-${code}`);
+    expect(err.code).toBe(code);
+  });
+});
+
+describe("parseTreasuryError", () => {
+  const contractCodes = numericEnumValues(TreasuryErrorCode).filter(
+    (code) => code < 100,
+  );
+
+  it.each(contractCodes)("handles TreasuryErrorCode contract value %i", (code) => {
+    const err = parseTreasuryError({ error: `ContractError(${code})` });
+    expect(err).toBeInstanceOf(TreasuryError);
+    expect(err.code).toBe(code);
+    expect(err.message.length).toBeGreaterThan(0);
+  });
+
+  it("maps unknown treasury contract codes without throwing", () => {
+    const err = parseTreasuryError({ error: "Error(Contract, #999)" });
+    expect(err.code).toBe(999 as TreasuryErrorCode);
+    expect(err.message).toBe("Treasury contract error #999");
+  });
+
+  it("maps transaction and simulation failures", () => {
+    expect(
+      parseTreasuryError({ status: "ERROR", error: "submit rejected" }).code,
+    ).toBe(TreasuryErrorCode.TransactionFailed);
+    expect(parseTreasuryError({ error: "simulate rejected" }).code).toBe(
+      TreasuryErrorCode.SimulationFailed,
+    );
+  });
+});
+
+describe("VotesError", () => {
+  it("preserves name, cause, and Error inheritance", () => {
+    const cause = new Error("votes");
+    const err = new VotesError(
+      VotesErrorCode.DelegationFailed,
+      "failed",
+      cause,
+    );
+    expect(err).toBeInstanceOf(Error);
+    expect(err).toBeInstanceOf(VotesError);
+    expect(err.name).toBe("VotesError");
+    expect(err.cause).toBe(cause);
+  });
+
+  it.each(
+    numericEnumValues(VotesErrorCode),
+  )("covers VotesErrorCode value %i", (code) => {
+    const err = new VotesError(code as VotesErrorCode, `message-${code}`);
+    expect(err.code).toBe(code);
+  });
+});
+
+describe("parseVotesError", () => {
+  it("maps transaction failures", () => {
+    const err = parseVotesError({
+      status: "ERROR",
+      error: "insufficient fee",
+    });
     expect(err).toBeInstanceOf(VotesError);
     expect(err.code).toBe(VotesErrorCode.TransactionFailed);
-    expect(err.message).toContain("Transaction failed");
     expect(err.message).toContain("insufficient fee");
   });
 
-  it("maps non-ERROR → SimulationFailed", () => {
-    const raw: SorobanRpcError = { error: "simulate failed" };
-    const err = parseVotesError(raw);
+  it("maps simulation failures", () => {
+    const err = parseVotesError({ error: "simulation failed" });
     expect(err.code).toBe(VotesErrorCode.SimulationFailed);
-    expect(err.message).toContain("Simulation failed");
   });
 
-  it("forwards the cause argument", () => {
-    const cause = { code: 42 };
-    const raw: SorobanRpcError = { status: "ERROR" };
-    const err = parseVotesError(raw, cause);
-    expect(err.cause).toBe(cause);
+  it("handles nullish input without throwing", () => {
+    expect(parseVotesError(null).code).toBe(VotesErrorCode.SimulationFailed);
+    expect(parseVotesError(undefined).code).toBe(
+      VotesErrorCode.SimulationFailed,
+    );
   });
 });

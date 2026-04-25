@@ -1,8 +1,9 @@
 #![no_std]
 
+use soroban_sdk::xdr::{FromXdr, ToXdr};
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, Bytes, Env, Symbol,
-    Vec,
+    Val, Vec,
 };
 
 /// Timelock error codes.
@@ -11,58 +12,58 @@ use soroban_sdk::{
 pub enum TimelockError {
     /// Operation has not yet been executed but is required as a predecessor.
     PredecessorNotDone = 1,
-    /// Predecessor operation does not exist.
+    /// Operation references a predecessor operation that does not exist.
     PredecessorNotFound = 2,
-    /// Operation has expired and can no longer be executed.
+    /// Operation can no longer be executed because its execution window elapsed.
     OperationExpired = 3,
 }
 
-/// An operation scheduled in the timelock.
+/// A scheduled timelock operation.
 #[contracttype]
 #[derive(Clone)]
 pub struct Operation {
     pub target: Address,
     pub data: Bytes,
-    pub fn_name: Symbol, // function to invoke on the target when executed
-    pub ready_at: u64,   // Unix timestamp when executable
-    pub expires_at: u64, // Unix timestamp when operation expires
+    pub fn_name: Symbol,
+    pub ready_at: u64,
+    pub expires_at: u64,
     pub executed: bool,
     pub cancelled: bool,
-    /// Predecessor operation ID that must be executed before this one.
-    /// Empty Bytes means no predecessor constraint.
     pub predecessor: Bytes,
 }
 
 #[contracttype]
 pub enum DataKey {
-    Operation(Bytes), // keyed by operation hash
+    Operation(Bytes),
     MinDelay,
     ExecutionWindow,
     Admin,
     Governor,
 }
 
-use soroban_sdk::xdr::ToXdr;
-
 #[contract]
 pub struct TimelockContract;
 
 #[contractimpl]
 impl TimelockContract {
-    /// Initialize timelock with minimum delay (in seconds), execution window, and admin.
-    pub fn initialize(env: Env, admin: Address, governor: Address, min_delay: u64, execution_window: u64) {
+    /// Initialize timelock with minimum delay, execution window, admin, and governor.
+    pub fn initialize(
+        env: Env,
+        admin: Address,
+        governor: Address,
+        min_delay: u64,
+        execution_window: u64,
+    ) {
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Governor, &governor);
         env.storage().instance().set(&DataKey::MinDelay, &min_delay);
-        env.storage().instance().set(&DataKey::ExecutionWindow, &execution_window);
+        env.storage()
+            .instance()
+            .set(&DataKey::ExecutionWindow, &execution_window);
     }
 
     /// Compute operation ID from target, data, predecessor, and salt.
-    ///
-    /// The ID is SHA-256(target_bytes || data_bytes || predecessor_bytes || salt_bytes).
-    /// This deterministic concatenation ensures that varying any component produces
-    /// a different operation ID, enabling salt-based uniqueness and predecessor tracking.
     pub fn compute_op_id(
         env: Env,
         target: Address,
@@ -80,16 +81,7 @@ impl TimelockContract {
         Bytes::from_array(&env, &hash.to_array())
     }
 
-    /// Schedule an operation with a delay.
-    ///
-    /// Only the governor may schedule operations. The `fn_name` parameter names
-    /// the function that will be invoked on `target` when the operation executes.
-    /// Returns a Bytes op-id equal to the SHA-256 hash of `target || data || predecessor || salt`.
-    ///
-    /// If `predecessor` is non-empty, it must be the operation ID of an existing
-    /// scheduled operation; otherwise PredecessorNotFound is returned.
-    /// `salt` is consumed during ID generation and not stored; it provides uniqueness
-    /// for otherwise identical operations.
+    /// Schedule a single operation.
     #[allow(clippy::too_many_arguments)]
     pub fn schedule(
         env: Env,
@@ -101,15 +93,12 @@ impl TimelockContract {
         predecessor: Bytes,
         salt: Bytes,
     ) -> Bytes {
+        caller.require_auth();
         Self::require_governor(&env, &caller);
-        Self::schedule_internal(env, target, data, fn_name, delay)
+        Self::schedule_operation(env, target, data, fn_name, delay, predecessor, salt)
     }
 
-    /// Schedule multiple operations in one call.
-    ///
-    /// All vector inputs must have the same length and each index forms one
-    /// operation tuple. `predecessors` and `salts` are accepted for forward
-    /// compatibility with richer operation graphing.
+    /// Schedule multiple operations in a single call.
     pub fn schedule_batch(
         env: Env,
         caller: Address,
@@ -122,6 +111,7 @@ impl TimelockContract {
     ) -> Vec<Bytes> {
         caller.require_auth();
         Self::require_governor(&env, &caller);
+
         let len = targets.len();
         assert!(len > 0, "empty batch");
         assert!(len == data.len(), "length mismatch");
@@ -131,95 +121,30 @@ impl TimelockContract {
 
         let mut op_ids = Vec::new(&env);
         for i in 0..len {
-            let target = targets.get(i).expect("target missing");
-            let item_data = data.get(i).expect("data missing");
-            let fn_name = fn_names.get(i).expect("fn missing");
-
-            // Preserve predecessor/salt arguments for API compatibility.
-            let _predecessor = predecessors.get(i).expect("predecessor missing");
-            let _salt = salts.get(i).expect("salt missing");
-
-        // Validate predecessor exists if specified
-        if !predecessor.is_empty() {
-            let pred_exists = env
-                .storage()
-                .persistent()
-                .has(&DataKey::Operation(predecessor.clone()));
-            if !pred_exists {
-                env.panic_with_error(TimelockError::PredecessorNotFound);
-            }
+            let op_id = Self::schedule_operation(
+                env.clone(),
+                targets.get(i).expect("target missing"),
+                data.get(i).expect("data missing"),
+                fn_names.get(i).expect("fn missing"),
+                delay,
+                predecessors.get(i).expect("predecessor missing"),
+                salts.get(i).expect("salt missing"),
+            );
+            op_ids.push_back(op_id);
         }
 
-        let min_delay: u64 = env
-            .storage()
-            .instance()
-            .get(&DataKey::MinDelay)
-            .unwrap_or(86400);
-        assert!(delay >= min_delay, "delay too short");
-
-        let execution_window: u64 = env
-            .storage()
-            .instance()
-            .get(&DataKey::ExecutionWindow)
-            .unwrap_or(1_209_600); // Default 14 days
-
-        let ready_at = env.ledger().timestamp() + delay;
-        let expires_at = ready_at + execution_window;
-        let op_id = Self::compute_op_id(
-            env.clone(),
-            target.clone(),
-            data.clone(),
-            predecessor.clone(),
-            salt,
-        );
-
-        let operation = Operation {
-            target,
-            data,
-            fn_name,
-            ready_at,
-            expires_at,
-            executed: false,
-            cancelled: false,
-            predecessor,
-        };
-
-        env.storage()
-            .persistent()
-            .set(&DataKey::Operation(op_id.clone()), &operation);
-
         env.events()
-            .publish((symbol_short!("schedule"),), op_id.clone());
+            .publish((symbol_short!("schbatch"),), op_ids.clone());
 
-        op_id
-    }
-
-    fn require_governor(env: &Env, caller: &Address) {
-        let governor: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Governor)
-            .expect("not initialized");
-        assert!(caller == &governor, "only governor");
+        op_ids
     }
 
     /// Execute a ready operation.
-    ///
-    /// Enforces the delay invariant, checks predecessor completion if one is set,
-    /// invokes `fn_name()` on `target` with no arguments, then marks the operation executed.
-    ///
-    /// Panics with TimelockError::PredecessorNotDone if the operation has a non-empty predecessor
-    /// that has not yet been executed.
     pub fn execute(env: Env, caller: Address, op_id: Bytes) {
         caller.require_auth();
-        let governor: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Governor)
-            .expect("not initialized");
-        assert!(caller == governor, "only governor");
+        Self::require_governor(&env, &caller);
 
-        let op: Operation = env
+        let mut op: Operation = env
             .storage()
             .persistent()
             .get(&DataKey::Operation(op_id.clone()))
@@ -231,23 +156,17 @@ impl TimelockContract {
             env.panic_with_error(TimelockError::OperationExpired);
         }
 
-        // Check predecessor if present
-        if !op.predecessor.is_empty() {
-            let pred_done = Self::is_done(env.clone(), op.predecessor.clone());
-            if !pred_done {
-                env.panic_with_error(TimelockError::PredecessorNotDone);
-            }
+        if !op.predecessor.is_empty() && !Self::is_done(env.clone(), op.predecessor.clone()) {
+            env.panic_with_error(TimelockError::PredecessorNotDone);
         }
 
-        // Mark as executed before invocation to prevent reentrancy issues
-        let mut op = op;
         op.executed = true;
         env.storage()
             .persistent()
             .set(&DataKey::Operation(op_id.clone()), &op);
 
-        // Invoke the target contract
-        env.invoke_contract::<()>(&op.target, &op.fn_name, Vec::new(&env));
+        let args = Self::decode_invocation_args(&env, &op.data);
+        env.invoke_contract::<()>(&op.target, &op.fn_name, args);
 
         env.events().publish((symbol_short!("execute"),), op_id);
     }
@@ -255,6 +174,7 @@ impl TimelockContract {
     /// Cancel a pending operation.
     pub fn cancel(env: Env, caller: Address, op_id: Bytes) {
         caller.require_auth();
+
         let admin: Address = env
             .storage()
             .instance()
@@ -274,64 +194,62 @@ impl TimelockContract {
             .expect("operation not found");
         assert!(!op.executed && !op.cancelled, "invalid state");
         op.cancelled = true;
+
         env.storage()
             .persistent()
             .set(&DataKey::Operation(op_id.clone()), &op);
-
         env.events().publish((symbol_short!("cancel"),), op_id);
     }
 
-    /// Check if an operation is pending (scheduled, not yet ready).
+    /// Check whether an operation is pending.
     pub fn is_pending(env: Env, op_id: Bytes) -> bool {
         let op: Option<Operation> = env.storage().persistent().get(&DataKey::Operation(op_id));
         match op {
-            Some(o) => !o.executed && !o.cancelled && env.ledger().timestamp() < o.ready_at,
+            Some(op) => !op.executed && !op.cancelled && env.ledger().timestamp() < op.ready_at,
             None => false,
         }
     }
 
-    /// Check if an operation is ready to execute.
+    /// Check whether an operation is ready.
     pub fn is_ready(env: Env, op_id: Bytes) -> bool {
         let op: Option<Operation> = env.storage().persistent().get(&DataKey::Operation(op_id));
         match op {
-            Some(o) => {
-                !o.executed && !o.cancelled 
-                && env.ledger().timestamp() >= o.ready_at 
-                && env.ledger().timestamp() <= o.expires_at
+            Some(op) => {
+                !op.executed
+                    && !op.cancelled
+                    && env.ledger().timestamp() >= op.ready_at
+                    && env.ledger().timestamp() <= op.expires_at
             }
             None => false,
         }
     }
 
-    /// Check if an operation has been executed.
-    ///
-    /// Returns true if the operation exists and has been executed.
-    /// Returns false if the operation does not exist, is cancelled, or is still pending.
+    /// Check whether an operation has been executed.
     pub fn is_done(env: Env, op_id: Bytes) -> bool {
         let op: Option<Operation> = env.storage().persistent().get(&DataKey::Operation(op_id));
         match op {
-            Some(o) => o.executed,
+            Some(op) => op.executed,
             None => false,
         }
     }
 
-    /// Get the minimum delay (in seconds).
+    /// Get the configured minimum delay in seconds.
     pub fn min_delay(env: Env) -> u64 {
         env.storage()
             .instance()
             .get(&DataKey::MinDelay)
-            .unwrap_or(86400)
+            .unwrap_or(86_400)
     }
 
-    /// Get the execution window (in seconds).
+    /// Get the configured execution window in seconds.
     pub fn execution_window(env: Env) -> u64 {
         env.storage()
             .instance()
             .get(&DataKey::ExecutionWindow)
-            .unwrap_or(1_209_600) // Default 14 days
+            .unwrap_or(1_209_600)
     }
 
-    /// Get the governor address.
+    /// Get the configured governor address.
     pub fn governor(env: Env) -> Address {
         env.storage()
             .instance()
@@ -339,7 +257,7 @@ impl TimelockContract {
             .expect("not initialized")
     }
 
-    /// Get the admin address.
+    /// Get the configured admin address.
     pub fn admin(env: Env) -> Address {
         env.storage()
             .instance()
@@ -347,89 +265,104 @@ impl TimelockContract {
             .expect("not initialized")
     }
 
-    /// Update minimum delay. Only admin.
+    /// Update the minimum delay. Only admin.
     pub fn update_delay(env: Env, caller: Address, new_delay: u64) {
         caller.require_auth();
-        let admin: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .expect("not initialized");
-        assert!(caller == admin, "only admin");
+        assert!(caller == Self::admin(env.clone()), "only admin");
         env.storage().instance().set(&DataKey::MinDelay, &new_delay);
     }
 
-    /// Update execution window. Only admin.
+    /// Update the execution window. Only admin.
     pub fn update_execution_window(env: Env, caller: Address, new_window: u64) {
         caller.require_auth();
-        let admin: Address = env
+        assert!(caller == Self::admin(env.clone()), "only admin");
+        env.storage()
+            .instance()
+            .set(&DataKey::ExecutionWindow, &new_window);
+    }
+
+    fn require_governor(env: &Env, caller: &Address) {
+        let governor: Address = env
             .storage()
             .instance()
-            .get(&DataKey::Admin)
+            .get(&DataKey::Governor)
             .expect("not initialized");
-        assert!(caller == admin, "only admin");
-        env.storage().instance().set(&DataKey::ExecutionWindow, &new_window);
+        assert!(caller == &governor, "only governor");
+    }
+
+    fn schedule_operation(
+        env: Env,
+        target: Address,
+        data: Bytes,
+        fn_name: Symbol,
+        delay: u64,
+        predecessor: Bytes,
+        salt: Bytes,
+    ) -> Bytes {
+        Self::validate_predecessor(&env, &predecessor);
+
+        let min_delay = Self::min_delay(env.clone());
+        assert!(delay >= min_delay, "delay too short");
+
+        let execution_window = Self::execution_window(env.clone());
+        let ready_at = env.ledger().timestamp() + delay;
+        let expires_at = ready_at + execution_window;
+        let op_id = Self::compute_op_id(
+            env.clone(),
+            target.clone(),
+            data.clone(),
+            predecessor.clone(),
+            salt,
+        );
+
+        let op = Operation {
+            target,
+            data,
+            fn_name,
+            ready_at,
+            expires_at,
+            executed: false,
+            cancelled: false,
+            predecessor,
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Operation(op_id.clone()), &op);
+        env.events()
+            .publish((symbol_short!("schedule"),), op_id.clone());
+
+        op_id
+    }
+
+    fn validate_predecessor(env: &Env, predecessor: &Bytes) {
+        if predecessor.is_empty() {
+            return;
+        }
+
+        let exists = env
+            .storage()
+            .persistent()
+            .has(&DataKey::Operation(predecessor.clone()));
+        if !exists {
+            env.panic_with_error(TimelockError::PredecessorNotFound);
+        }
+    }
+
+    fn decode_invocation_args(env: &Env, data: &Bytes) -> Vec<Val> {
+        if data.is_empty() {
+            return Vec::new(env);
+        }
+
+        if let Ok(args) = Vec::<Val>::from_xdr(env, data) {
+            return args;
+        }
+
+        // Preserve compatibility with legacy callers that used opaque bytes for
+        // no-arg calls before structured calldata decoding was implemented.
+        Vec::new(env)
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use soroban_sdk::{
-        testutils::{Address as _, Events},
-        TryIntoVal,
-    };
-
-    #[test]
-    fn schedule_batch_returns_ids_and_emits_event() {
-        let env = Env::default();
-        env.mock_all_auths();
-
-        let contract_id = env.register(TimelockContract, ());
-        let client = TimelockContractClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
-        let governor = Address::generate(&env);
-        client.initialize(&admin, &governor, &1);
-
-        let mut targets = Vec::new(&env);
-        targets.push_back(Address::generate(&env));
-        targets.push_back(Address::generate(&env));
-
-        let mut payloads = Vec::new(&env);
-        payloads.push_back(Bytes::from_array(&env, &[1u8, 2u8]));
-        payloads.push_back(Bytes::from_array(&env, &[3u8, 4u8]));
-
-        let mut fn_names = Vec::new(&env);
-        fn_names.push_back(Symbol::new(&env, "ping"));
-        fn_names.push_back(Symbol::new(&env, "pong"));
-
-        let mut predecessors = Vec::new(&env);
-        predecessors.push_back(Bytes::new(&env));
-        predecessors.push_back(Bytes::new(&env));
-
-        let mut salts = Vec::new(&env);
-        salts.push_back(Bytes::from_array(&env, &[9u8]));
-        salts.push_back(Bytes::from_array(&env, &[8u8]));
-
-        let ids = client.schedule_batch(
-            &governor,
-            &targets,
-            &payloads,
-            &fn_names,
-            &10,
-            &predecessors,
-            &salts,
-        );
-        assert_eq!(ids.len(), 2);
-
-        let events = env.events().all();
-        let has_batch_event = events.iter().any(|(_, topics, _)| {
-            topics.len() >= 1 && {
-                let first: Result<Symbol, _> = topics.get(0).unwrap().try_into_val(&env);
-                first.is_ok() && first.unwrap() == symbol_short!("schbatch")
-            }
-        });
-        assert!(has_batch_event, "schedule_batch event not emitted");
-    }
-}
 mod test;

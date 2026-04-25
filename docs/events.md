@@ -74,6 +74,27 @@ Emitted when the governor contract upgrades its WASM.
 | `old_hash` | `BytesN<32>` | Previously stored WASM hash. The initial value is all zeros until the first tracked upgrade. |
 | `new_hash` | `BytesN<32>` | New WASM hash applied to the contract. |
 
+## Paused
+
+Emitted when the contract is paused by the authorized pauser role.
+
+| Field | Type | Description |
+|---|---|---|
+| `pauser` | `Address` | Address that triggered the pause (also appears as the second topic segment). |
+| `ledger` | `u32` | Ledger sequence number at which the pause was applied. |
+
+> **Topics:** `["Paused", <pauser address>]`
+
+## Unpaused
+
+Emitted when the contract is unpaused via a governance proposal (contract self-auth).
+
+| Field | Type | Description |
+|---|---|---|
+| `ledger` | `u32` | Ledger sequence number at which the contract was unpaused. |
+
+> **Topics:** `["Unpaused"]`
+
 ## ConfigUpdated
 
 Emitted when governance updates the governor settings.

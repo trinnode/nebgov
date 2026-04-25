@@ -17,7 +17,9 @@ mod invariant_tests {
     /// Setup a token-votes contract with a test token.
     fn setup(env: &Env) -> (Address, Address) {
         let admin = Address::generate(env);
-        let token_addr = env.register_stellar_asset_contract_v2(admin.clone()).address();
+        let token_addr = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
         let contract_id = env.register(TokenVotesContract, ());
         let client = TokenVotesContractClient::new(env, &contract_id);
         client.initialize(&admin, &token_addr);

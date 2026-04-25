@@ -45,6 +45,7 @@ export enum GovernorErrorCode {
   EmptyMetadataUri = 24,
   VotesTokenNotSet = 25,
   PauserNotSet = 26,
+  ArithmeticOverflow = 27,
 
   // SDK-level codes
   RpcNotFound = 100,
@@ -95,6 +96,8 @@ const GOVERNOR_MESSAGES: Record<GovernorErrorCode, string> = {
   [GovernorErrorCode.EmptyMetadataUri]: "Metadata URI cannot be empty",
   [GovernorErrorCode.VotesTokenNotSet]: "Votes token address is not configured",
   [GovernorErrorCode.PauserNotSet]: "Pauser address is not configured",
+  [GovernorErrorCode.ArithmeticOverflow]:
+    "Arithmetic overflow while computing governance state",
 
   // SDK-level codes
   [GovernorErrorCode.RpcNotFound]: "Proposal not found",
@@ -210,6 +213,16 @@ export interface SorobanRpcError {
   resultXdr?: string;
 }
 
+function errorText(raw: SorobanRpcError | string | null | undefined): string {
+  if (typeof raw === "string") return raw;
+  if (!raw || typeof raw !== "object") return "";
+  return typeof raw.error === "string" ? raw.error : "";
+}
+
+function hasErrorStatus(raw: SorobanRpcError | string | null | undefined): boolean {
+  return !!raw && typeof raw === "object" && raw.status === "ERROR";
+}
+
 /**
  * Extract a numeric contract error code from a Soroban RPC error string.
  *
@@ -218,8 +231,11 @@ export interface SorobanRpcError {
  * - `"HostError: Value(ContractError(3))"`
  * - `"contract error: #3"` (older RPC versions)
  */
-export function extractContractErrorCode(raw: SorobanRpcError): number | null {
-  const str = raw.error ?? "";
+export function extractContractErrorCode(
+  raw: SorobanRpcError | string | null | undefined,
+): number | null {
+  const str = errorText(raw);
+  if (!str) return null;
 
   // "Error(Contract, #3)"
   const hashMatch = str.match(/Error\(Contract,\s*#(\d+)\)/);
@@ -244,7 +260,7 @@ export function extractContractErrorCode(raw: SorobanRpcError): number | null {
  * Otherwise a generic transport-level code is assigned.
  */
 export function parseGovernorError(
-  raw: SorobanRpcError,
+  raw: SorobanRpcError | string | null | undefined,
   cause?: unknown,
 ): GovernorError {
   const contractCode = extractContractErrorCode(raw);
@@ -255,17 +271,17 @@ export function parseGovernorError(
     return new GovernorError(code, message, cause);
   }
 
-  if (raw.status === "ERROR") {
+  if (hasErrorStatus(raw)) {
     return new GovernorError(
       GovernorErrorCode.TransactionFailed,
-      `${GOVERNOR_MESSAGES[GovernorErrorCode.TransactionFailed]}: ${raw.error ?? "unknown"}`,
+      `${GOVERNOR_MESSAGES[GovernorErrorCode.TransactionFailed]}: ${errorText(raw) || "unknown"}`,
       cause,
     );
   }
 
   return new GovernorError(
     GovernorErrorCode.SimulationFailed,
-    `${GOVERNOR_MESSAGES[GovernorErrorCode.SimulationFailed]}: ${raw.error ?? "unknown"}`,
+    `${GOVERNOR_MESSAGES[GovernorErrorCode.SimulationFailed]}: ${errorText(raw) || "unknown"}`,
     cause,
   );
 }
@@ -274,7 +290,7 @@ export function parseGovernorError(
  * Parse a raw Soroban RPC error into a typed {@link TimelockError}.
  */
 export function parseTimelockError(
-  raw: SorobanRpcError,
+  raw: SorobanRpcError | string | null | undefined,
   cause?: unknown,
 ): TimelockError {
   const contractCode = extractContractErrorCode(raw);
@@ -285,17 +301,17 @@ export function parseTimelockError(
     return new TimelockError(code, message, cause);
   }
 
-  if (raw.status === "ERROR") {
+  if (hasErrorStatus(raw)) {
     return new TimelockError(
       TimelockErrorCode.TransactionFailed,
-      `${TIMELOCK_MESSAGES[TimelockErrorCode.TransactionFailed]}: ${raw.error ?? "unknown"}`,
+      `${TIMELOCK_MESSAGES[TimelockErrorCode.TransactionFailed]}: ${errorText(raw) || "unknown"}`,
       cause,
     );
   }
 
   return new TimelockError(
     TimelockErrorCode.SimulationFailed,
-    `${TIMELOCK_MESSAGES[TimelockErrorCode.SimulationFailed]}: ${raw.error ?? "unknown"}`,
+    `${TIMELOCK_MESSAGES[TimelockErrorCode.SimulationFailed]}: ${errorText(raw) || "unknown"}`,
     cause,
   );
 }
@@ -321,6 +337,10 @@ export enum TreasuryErrorCode {
 }
 
 const TREASURY_MESSAGES: Record<TreasuryErrorCode, string> = {
+  [TreasuryErrorCode.SingleTransferExceeded]:
+    "Transfer exceeds the maximum allowed single-transfer amount",
+  [TreasuryErrorCode.DailyLimitExceeded]:
+    "Transfer exceeds the configured daily treasury limit",
   [TreasuryErrorCode.SimulationFailed]: "Simulation failed",
   [TreasuryErrorCode.TransactionFailed]: "Transaction failed",
   [TreasuryErrorCode.TransactionTimeout]: "Transaction timed out",
@@ -345,7 +365,7 @@ export class TreasuryError extends Error {
  * Parse a raw Soroban RPC error into a typed {@link TreasuryError}.
  */
 export function parseTreasuryError(
-  raw: SorobanRpcError,
+  raw: SorobanRpcError | string | null | undefined,
   cause?: unknown,
 ): TreasuryError {
   const contractCode = extractContractErrorCode(raw);
@@ -356,17 +376,17 @@ export function parseTreasuryError(
     return new TreasuryError(code, message, cause);
   }
 
-  if (raw.status === "ERROR") {
+  if (hasErrorStatus(raw)) {
     return new TreasuryError(
       TreasuryErrorCode.TransactionFailed,
-      `${TREASURY_MESSAGES[TreasuryErrorCode.TransactionFailed]}: ${raw.error ?? "unknown"}`,
+      `${TREASURY_MESSAGES[TreasuryErrorCode.TransactionFailed]}: ${errorText(raw) || "unknown"}`,
       cause,
     );
   }
 
   return new TreasuryError(
     TreasuryErrorCode.SimulationFailed,
-    `${TREASURY_MESSAGES[TreasuryErrorCode.SimulationFailed]}: ${raw.error ?? "unknown"}`,
+    `${TREASURY_MESSAGES[TreasuryErrorCode.SimulationFailed]}: ${errorText(raw) || "unknown"}`,
     cause,
   );
 }
@@ -375,20 +395,20 @@ export function parseTreasuryError(
  * Parse a raw Soroban RPC error into a typed {@link VotesError}.
  */
 export function parseVotesError(
-  raw: SorobanRpcError,
+  raw: SorobanRpcError | string | null | undefined,
   cause?: unknown,
 ): VotesError {
-  if (raw.status === "ERROR") {
+  if (hasErrorStatus(raw)) {
     return new VotesError(
       VotesErrorCode.TransactionFailed,
-      `${VOTES_MESSAGES[VotesErrorCode.TransactionFailed]}: ${raw.error ?? "unknown"}`,
+      `${VOTES_MESSAGES[VotesErrorCode.TransactionFailed]}: ${errorText(raw) || "unknown"}`,
       cause,
     );
   }
 
   return new VotesError(
     VotesErrorCode.SimulationFailed,
-    `${VOTES_MESSAGES[VotesErrorCode.SimulationFailed]}: ${raw.error ?? "unknown"}`,
+    `${VOTES_MESSAGES[VotesErrorCode.SimulationFailed]}: ${errorText(raw) || "unknown"}`,
     cause,
   );
 }

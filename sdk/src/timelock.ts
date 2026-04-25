@@ -77,9 +77,20 @@ export class TimelockClient {
     signer: Keypair,
     target: string,
     data: Buffer,
-    fnName: string,
-    delay: bigint
+    fnNameOrDelay: string | bigint,
+    delayArg?: bigint
   ): Promise<string> {
+    const fnName =
+      typeof fnNameOrDelay === "string" ? fnNameOrDelay : "execute";
+    const delay =
+      typeof fnNameOrDelay === "bigint" ? fnNameOrDelay : delayArg;
+    if (delay === undefined) {
+      throw new TimelockError(
+        TimelockErrorCode.MissingReturnValue,
+        "schedule requires a delay",
+      );
+    }
+
     const account = await this.server.getAccount(signer.publicKey());
 
     const tx = new TransactionBuilder(account, {
@@ -282,7 +293,7 @@ export class TimelockClient {
   async isReady(opId: string): Promise<boolean> {
     const result = await this.server.simulateTransaction(
       new TransactionBuilder(
-        await this.server.getAccount(this.config.timelockAddress),
+        await this.server.getAccount(this.readAccount()),
         { fee: BASE_FEE, networkPassphrase: this.networkPassphrase }
       )
         .addOperation(
@@ -312,7 +323,7 @@ export class TimelockClient {
   async isPending(opId: string): Promise<boolean> {
     const result = await this.server.simulateTransaction(
       new TransactionBuilder(
-        await this.server.getAccount(this.config.timelockAddress),
+        await this.server.getAccount(this.readAccount()),
         { fee: BASE_FEE, networkPassphrase: this.networkPassphrase }
       )
         .addOperation(
@@ -337,7 +348,7 @@ export class TimelockClient {
   async minDelay(): Promise<bigint> {
     const result = await this.server.simulateTransaction(
       new TransactionBuilder(
-        await this.server.getAccount(this.config.timelockAddress),
+        await this.server.getAccount(this.readAccount()),
         { fee: BASE_FEE, networkPassphrase: this.networkPassphrase }
       )
         .addOperation(this.contract.call("min_delay"))
@@ -352,6 +363,10 @@ export class TimelockClient {
   }
 
   // --- Internal ---
+
+  private readAccount(): string {
+    return this.config.simulationAccount ?? this.config.timelockAddress;
+  }
 
   private async pollForConfirmation(
     hash: string,

@@ -1,8 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, token, Address, Env, Vec,
-};
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, token, Address, Env, Vec};
 
 /// A voting power checkpoint at a specific ledger sequence.
 #[contracttype]
@@ -14,12 +12,12 @@ pub struct Checkpoint {
 
 #[contracttype]
 pub enum DataKey {
-    Delegate(Address),        // delegator -> delegatee
-    Checkpoints(Address),     // account -> Vec<Checkpoint>
-    TotalCheckpoints,         // global total supply checkpoints
-    UnderlyingToken,          // SEP-41 token being wrapped
+    Delegate(Address),    // delegator -> delegatee
+    Checkpoints(Address), // account -> Vec<Checkpoint>
+    TotalCheckpoints,     // global total supply checkpoints
+    UnderlyingToken,      // SEP-41 token being wrapped
     Admin,
-    LockedUntil(Address),     // address -> ledger until which withdrawal is locked
+    LockedUntil(Address), // address -> ledger until which withdrawal is locked
 }
 
 #[contract]
@@ -57,11 +55,20 @@ impl TokenVotesWrapperContract {
             let last_cp: Checkpoint = last;
             if last_cp.ledger == ledger {
                 let idx = checkpoints.len() - 1;
-                checkpoints.set(idx, Checkpoint { ledger, votes: new_votes });
+                checkpoints.set(
+                    idx,
+                    Checkpoint {
+                        ledger,
+                        votes: new_votes,
+                    },
+                );
                 return;
             }
         }
-        checkpoints.push_back(Checkpoint { ledger, votes: new_votes });
+        checkpoints.push_back(Checkpoint {
+            ledger,
+            votes: new_votes,
+        });
     }
 
     /// Move `delta` votes from `src` to `dst` in per-account checkpoints.
@@ -75,9 +82,15 @@ impl TokenVotesWrapperContract {
                 .persistent()
                 .get(&DataKey::Checkpoints(src_addr.clone()))
                 .unwrap_or_else(|| Vec::new(env));
-            let current = if cps.is_empty() { 0 } else { cps.last().map(|c: Checkpoint| c.votes).unwrap_or(0) };
+            let current = if cps.is_empty() {
+                0
+            } else {
+                cps.last().map(|c: Checkpoint| c.votes).unwrap_or(0)
+            };
             Self::write_checkpoint(env, &mut cps, current - delta);
-            env.storage().persistent().set(&DataKey::Checkpoints(src_addr.clone()), &cps);
+            env.storage()
+                .persistent()
+                .set(&DataKey::Checkpoints(src_addr.clone()), &cps);
         }
         if let Some(dst_addr) = dst {
             let mut cps: Vec<Checkpoint> = env
@@ -85,9 +98,15 @@ impl TokenVotesWrapperContract {
                 .persistent()
                 .get(&DataKey::Checkpoints(dst_addr.clone()))
                 .unwrap_or_else(|| Vec::new(env));
-            let current = if cps.is_empty() { 0 } else { cps.last().map(|c: Checkpoint| c.votes).unwrap_or(0) };
+            let current = if cps.is_empty() {
+                0
+            } else {
+                cps.last().map(|c: Checkpoint| c.votes).unwrap_or(0)
+            };
             Self::write_checkpoint(env, &mut cps, current + delta);
-            env.storage().persistent().set(&DataKey::Checkpoints(dst_addr.clone()), &cps);
+            env.storage()
+                .persistent()
+                .set(&DataKey::Checkpoints(dst_addr.clone()), &cps);
         }
     }
 }
@@ -98,11 +117,16 @@ impl TokenVotesWrapperContract {
     pub fn initialize(env: Env, admin: Address, underlying_token: Address) {
         admin.require_auth();
         assert!(
-            env.storage().instance().get::<_, Address>(&DataKey::Admin).is_none(),
+            env.storage()
+                .instance()
+                .get::<_, Address>(&DataKey::Admin)
+                .is_none(),
             "already initialized"
         );
         env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage().instance().set(&DataKey::UnderlyingToken, &underlying_token);
+        env.storage()
+            .instance()
+            .set(&DataKey::UnderlyingToken, &underlying_token);
     }
 
     /// Deposit `amount` of the underlying SEP-41 token and receive 1:1 wrapped voting tokens.
@@ -138,12 +162,12 @@ impl TokenVotesWrapperContract {
             .unwrap_or_else(|| Vec::new(&env));
         let current_total = total_cps.last().map(|c: Checkpoint| c.votes).unwrap_or(0);
         Self::write_checkpoint(&env, &mut total_cps, current_total + amount);
-        env.storage().persistent().set(&DataKey::TotalCheckpoints, &total_cps);
+        env.storage()
+            .persistent()
+            .set(&DataKey::TotalCheckpoints, &total_cps);
 
-        env.events().publish(
-            (symbol_short!("deposit"), from),
-            (underlying, amount),
-        );
+        env.events()
+            .publish((symbol_short!("deposit"), from), (underlying, amount));
     }
 
     /// Burn wrapped voting tokens and return underlying SEP-41 tokens.
@@ -175,8 +199,14 @@ impl TokenVotesWrapperContract {
             .persistent()
             .get(&DataKey::Checkpoints(delegatee.clone()))
             .unwrap_or_else(|| Vec::new(&env));
-        let current_balance = delegatee_cps.last().map(|c: Checkpoint| c.votes).unwrap_or(0);
-        assert!(current_balance >= amount, "insufficient wrapped token balance");
+        let current_balance = delegatee_cps
+            .last()
+            .map(|c: Checkpoint| c.votes)
+            .unwrap_or(0);
+        assert!(
+            current_balance >= amount,
+            "insufficient wrapped token balance"
+        );
 
         Self::move_voting_power(&env, Some(&delegatee), None, amount);
 
@@ -188,7 +218,9 @@ impl TokenVotesWrapperContract {
             .unwrap_or_else(|| Vec::new(&env));
         let current_total = total_cps.last().map(|c: Checkpoint| c.votes).unwrap_or(0);
         Self::write_checkpoint(&env, &mut total_cps, current_total - amount);
-        env.storage().persistent().set(&DataKey::TotalCheckpoints, &total_cps);
+        env.storage()
+            .persistent()
+            .set(&DataKey::TotalCheckpoints, &total_cps);
 
         // Return underlying tokens
         let underlying: Address = env
@@ -199,10 +231,8 @@ impl TokenVotesWrapperContract {
         let underlying_client = token::Client::new(&env, &underlying);
         underlying_client.transfer(&env.current_contract_address(), &from, &amount);
 
-        env.events().publish(
-            (symbol_short!("withdraw"), from),
-            (underlying, amount),
-        );
+        env.events()
+            .publish((symbol_short!("withdraw"), from), (underlying, amount));
     }
 
     /// Delegate voting power to another address.
@@ -242,9 +272,15 @@ impl TokenVotesWrapperContract {
     pub fn lock_withdrawal(env: Env, caller: Address, from: Address, end_ledger: u32) {
         caller.require_auth();
         // Only the admin (governor) can call this
-        let admin: Address = env.storage().instance().get(&DataKey::Admin).expect("not initialized");
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("not initialized");
         assert_eq!(caller, admin, "only admin can lock withdrawals");
-        env.storage().persistent().set(&DataKey::LockedUntil(from), &end_ledger);
+        env.storage()
+            .persistent()
+            .set(&DataKey::LockedUntil(from), &end_ledger);
     }
 
     // --- VotesTrait compatible methods (for GovernorClient cross-contract calls) ---
@@ -310,7 +346,9 @@ mod tests {
     #[contractimpl]
     impl MockSep41Token {
         pub fn initialize(env: Env, admin: Address) {
-            env.storage().instance().set(&soroban_sdk::Symbol::new(&env, "admin"), &admin);
+            env.storage()
+                .instance()
+                .set(&soroban_sdk::Symbol::new(&env, "admin"), &admin);
         }
 
         pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {

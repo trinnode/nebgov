@@ -4,6 +4,37 @@
 
 `token-votes` resolves historical voting power with `binary_search()` over ordered checkpoints. This document tracks measured CPU instruction cost for realistic checkpoint counts used in governance hot paths (`get_past_votes`, quorum checks, vote casting).
 
+It also tracks the optimized contract WASM sizes that CI enforces during
+release builds. The Rust workflow warns when a contract exceeds 80 KiB and
+fails when it exceeds 100 KiB.
+
+## Contract WASM Sizes
+
+Measured from:
+
+```bash
+cargo build --target wasm32v1-none --release \
+  -p sorogov-governor \
+  -p sorogov-timelock \
+  -p sorogov-token-votes \
+  -p sorogov-governor-factory \
+  -p sorogov-treasury \
+  -p sorogov-liquidity
+```
+
+| Contract | Size (bytes) | Size (KiB) | Status |
+| -------- | -----------: | ---------: | ------ |
+| `sorogov_governor.wasm` | 81,580 | 79.7 | OK |
+| `sorogov_governor_factory.wasm` | 17,236 | 16.8 | OK |
+| `sorogov_liquidity.wasm` | 18,640 | 18.2 | OK |
+| `sorogov_timelock.wasm` | 24,300 | 23.7 | OK |
+| `sorogov_token_votes.wasm` | 27,634 | 27.0 | OK |
+| `sorogov_treasury.wasm` | 30,351 | 29.6 | OK |
+
+The governor contract is currently the largest artifact and sits just below the
+80 KiB warning threshold, so size-sensitive changes there should be watched
+closely.
+
 ## Load Tests
 
 Implemented in `contracts/token-votes/src/load_tests.rs`:

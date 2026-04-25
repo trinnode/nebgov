@@ -40,7 +40,13 @@ pub trait TokenVotesTrait {
 
 #[contractclient(name = "TimelockClient")]
 pub trait TimelockTrait {
-    fn initialize(env: Env, admin: Address, governor: Address, min_delay: u64, execution_window: u64);
+    fn initialize(
+        env: Env,
+        admin: Address,
+        governor: Address,
+        min_delay: u64,
+        execution_window: u64,
+    );
 }
 
 #[contractclient(name = "GovernorClient")]
@@ -144,14 +150,25 @@ impl GovernorFactoryContract {
         let (token_votes_addr, timelock_addr, governor_addr) = {
             #[cfg(test)]
             {
-                use soroban_sdk::testutils::Address as _;
                 use sorogov_governor::GovernorContract;
                 use sorogov_timelock::TimelockContract;
                 use sorogov_token_votes::TokenVotesContract;
 
-                let token_votes_addr = Address::generate(&env);
-                let timelock_addr = Address::generate(&env);
-                let governor_addr = Address::generate(&env);
+                salt_bin[31] = 1;
+                let token_votes_addr = env
+                    .deployer()
+                    .with_current_contract(BytesN::from_array(&env, &salt_bin))
+                    .deployed_address();
+                salt_bin[31] = 2;
+                let timelock_addr = env
+                    .deployer()
+                    .with_current_contract(BytesN::from_array(&env, &salt_bin))
+                    .deployed_address();
+                salt_bin[31] = 3;
+                let governor_addr = env
+                    .deployer()
+                    .with_current_contract(BytesN::from_array(&env, &salt_bin))
+                    .deployed_address();
 
                 env.register_at(&token_votes_addr, TokenVotesContract, ());
                 env.register_at(&timelock_addr, TimelockContract, ());
@@ -206,7 +223,7 @@ impl GovernorFactoryContract {
             2 => VoteType::Quadratic,
             _ => VoteType::Extended, // Default to Extended
         };
-        
+
         GovernorClient::new(&env, &governor_addr).initialize(
             &deployer,
             &token_votes_addr,
