@@ -77,3 +77,4 @@ export {
   parseUnpauseEvent,
 } from "./events";
 export * from "./types";
+export { computeQuadraticWeight, hexToBytes32 } from "./utils";

@@ -1,4 +1,17 @@
 /**
+ * Computes the effective vote weight under quadratic voting.
+ *
+ * Under VoteType::Quadratic the governor uses floor(sqrt(rawBalance)) as the
+ * weight, so a holder with 10,000 tokens has a weight of 100, not 10,000.
+ */
+export function computeQuadraticWeight(rawBalance: bigint): bigint {
+  if (rawBalance < 0n) {
+    throw new Error("rawBalance must be non-negative");
+  }
+  return BigInt(Math.floor(Math.sqrt(Number(rawBalance))));
+}
+
+/**
  * Robust hex-to-32-byte-buffer conversion utility for Soroban SDK.
  *
  * This handles stripping '0x' prefixes, padding, and validation

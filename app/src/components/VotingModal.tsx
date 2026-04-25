@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from "react";
 import { Keypair } from "@stellar/stellar-sdk";
 import toast from "react-hot-toast";
-import { GovernorClient, VoteSupport, VotesClient, type Network } from "@nebgov/sdk";
+import { GovernorClient, VoteSupport, VotesClient, VoteType, computeQuadraticWeight, type Network } from "@nebgov/sdk";
 import { useWallet } from "../lib/wallet-context";
 
 interface Props {
@@ -11,10 +11,12 @@ interface Props {
   onClose: () => void;
   proposalId: bigint;
   preselectedSupport: VoteSupport | null;
-  delegatee: string | null;
+  delegatee?: string | null;
   votingPower: bigint;
-  onOpenDelegate: () => void;
+  onOpenDelegate?: () => void;
   onVoted: () => void;
+  voteType?: VoteType;
+  governorClient?: GovernorClient | null;
 }
 
 function getGovernorClientFromEnv(): GovernorClient {
@@ -58,6 +60,7 @@ export function VotingModal({
   votingPower,
   onOpenDelegate,
   onVoted,
+  voteType,
 }: Props) {
   const { isConnected, connect, publicKey } = useWallet();
   const [support, setSupport] = useState<VoteSupport | null>(preselectedSupport ?? null);
@@ -69,6 +72,8 @@ export function VotingModal({
   if (!open) return null;
 
   const tokenAmount = Number(votingPower) / 1e6;
+  const isQuadratic = voteType === VoteType.Quadratic;
+  const quadraticWeight = isQuadratic ? computeQuadraticWeight(votingPower) : null;
 
   const totalSupplyRaw = process.env.NEXT_PUBLIC_TOTAL_SUPPLY; // optional, in tokens (raw units)
   const percentOfSupply = (() => {
@@ -150,12 +155,37 @@ export function VotingModal({
         {/* Voting power */}
         <div className="mb-4">
           <p className="text-sm text-gray-500">Your voting power</p>
-          <p className="text-base font-medium text-gray-900 dark:text-gray-100">
-            {tokenAmount.toLocaleString(undefined, { maximumFractionDigits: 6 })} tokens
-            {percentOfSupply !== null ? (
-              <span className="text-sm text-gray-500"> ({percentOfSupply}%)</span>
-            ) : null}
-          </p>
+          {isQuadratic ? (
+            <div>
+              <p className="text-base font-medium text-gray-900 dark:text-gray-100">
+                {tokenAmount.toLocaleString(undefined, { maximumFractionDigits: 6 })} tokens
+                {percentOfSupply !== null ? (
+                  <span className="text-sm text-gray-500"> ({percentOfSupply}%)</span>
+                ) : null}
+              </p>
+              <div className="mt-1 flex items-center gap-2">
+                <p className="text-sm font-semibold text-indigo-600 dark:text-indigo-400">
+                  Vote weight: {quadraticWeight!.toLocaleString()} (quadratic)
+                </p>
+                <span
+                  className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-gray-200 dark:bg-gray-600 text-gray-600 dark:text-gray-300 text-[10px] cursor-help"
+                  title="Quadratic voting: your vote weight is floor(√balance). A balance of 10,000 tokens gives a weight of 100, not 10,000. This reduces the influence of large token holders."
+                >
+                  ?
+                </span>
+              </div>
+              <p className="text-xs text-gray-400 mt-0.5">
+                Formula: floor(√{tokenAmount.toLocaleString(undefined, { maximumFractionDigits: 6 })}) = {quadraticWeight!.toLocaleString()}
+              </p>
+            </div>
+          ) : (
+            <p className="text-base font-medium text-gray-900 dark:text-gray-100">
+              {tokenAmount.toLocaleString(undefined, { maximumFractionDigits: 6 })} tokens
+              {percentOfSupply !== null ? (
+                <span className="text-sm text-gray-500"> ({percentOfSupply}%)</span>
+              ) : null}
+            </p>
+          )}
         </div>
 
         {/* Vote options */}
