@@ -18,7 +18,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import { ChevronDown, ChevronUp, Share2, Loader2, Hash, Link as LinkIcon, FileText, AlertCircle } from "lucide-react";
-import { GovernorClient, VotesClient, hashDescription, type Network } from "@nebgov/sdk";
+import { GovernorClient, VotesClient, hashDescription, uploadProposalMetadata, type Network } from "@nebgov/sdk";
 import {
   calldataArgRowToScVal,
   encodeGovernorCalldataBytes,
@@ -48,8 +48,38 @@ export default function ProposePage() {
   const [args, setArgs] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [simulating, setSimulating] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [canProposeResult, setCanProposeResult] = useState<{ canPropose: boolean; reason?: string; availableAtLedger?: number } | null>(null);
   const [simulationResult, setSimulationResult] = useState<SimulationResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  async function handleIpfsUpload() {
+    if (!draft.description.trim()) {
+      setStepErrors(["Please enter a description first."]);
+      return;
+    }
+
+    const pinataKey = localStorage.getItem("pinata_jwt") || "";
+    if (!pinataKey) {
+      const key = prompt("Please enter your Pinata JWT (or API Key):");
+      if (!key) return;
+      localStorage.setItem("pinata_jwt", key);
+    }
+
+    setIsUploading(true);
+    setStepErrors([]);
+    try {
+      const { uri, hash } = await uploadProposalMetadata(draft.description, {
+        pinataApiKey: localStorage.getItem("pinata_jwt") || "",
+      });
+      setDraft((d) => ({ ...d, ipfsRef: uri, descriptionHash: hash }));
+    } catch (err) {
+      console.error("IPFS upload failed:", err);
+      setStepErrors([err instanceof Error ? err.message : "IPFS upload failed"]);
+    } finally {
+      setIsUploading(false);
+    }
+  }
 
   const parseArgs = (argsString: string): any[] => {
     if (!argsString.trim()) return [];
@@ -232,6 +262,10 @@ export default function ProposePage() {
         ]);
         return;
       }
+      if (canProposeResult && !canProposeResult.canPropose) {
+        setStepErrors([canProposeResult.reason ?? "Rate limit active."]);
+        return;
+      }
       void submitProposal();
       return;
     }
@@ -283,12 +317,14 @@ export default function ProposePage() {
     if (!clients || !publicKey) return;
     setEstimate(null);
     setEstimateErr(null);
-    const [v, t] = await Promise.all([
+    const [v, t, cp] = await Promise.all([
       clients.votes.getVotes(publicKey),
       clients.governor.proposalThreshold(),
+      clients.governor.canPropose(publicKey),
     ]);
     setVotes(v);
     setThreshold(t);
+    setCanProposeResult(cp);
 
     const description = buildDescription(
       draft.title,
@@ -473,8 +509,24 @@ export default function ProposePage() {
             </div>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1 flex items-center justify-between">
               Metadata Uri / IPFS Attachment
+              <button
+                type="button"
+                onClick={handleIpfsUpload}
+                disabled={isUploading || !draft.description.trim()}
+                className="text-[10px] bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 px-2 py-0.5 rounded hover:bg-indigo-100 disabled:opacity-50 flex items-center gap-1"
+              >
+                {isUploading ? (
+                  <>
+                    <Loader2 className="w-3 h-3 animate-spin" /> Uploading...
+                  </>
+                ) : (
+                  <>
+                    <Share2 className="w-3 h-3" /> Upload to IPFS
+                  </>
+                )}
+              </button>
             </label>
             <input
               type="text"
@@ -797,6 +849,21 @@ export default function ProposePage() {
                     <p className="text-xl font-bold text-gray-900 dark:text-white">
                       {threshold === null ? "..." : (Number(threshold) / 10 ** 7).toLocaleString()}
                     </p>
+                  </div>
+                </div>
+              )}
+
+              {canProposeResult && !canProposeResult.canPropose && (
+                <div className="flex items-start gap-3 text-red-700 bg-red-50 dark:bg-red-900/20 dark:text-red-400 p-4 rounded-xl text-sm border border-red-100 dark:border-red-900/30">
+                  <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-semibold">Rate limit active</p>
+                    <p className="mt-1">{canProposeResult.reason}</p>
+                    {canProposeResult.availableAtLedger && (
+                      <p className="mt-2 text-xs opacity-80">
+                        Estimated availability: Ledger {canProposeResult.availableAtLedger}
+                      </p>
+                    )}
                   </div>
                 </div>
               )}

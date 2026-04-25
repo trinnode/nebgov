@@ -1384,6 +1384,29 @@ impl GovernorContract {
             .unwrap_or(0)
     }
 
+    /// Get the ledger sequence of the last proposal by an address.
+    pub fn last_proposal_ledger(env: Env, address: Address) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::LastProposalLedger(address))
+            .unwrap_or(0)
+    }
+
+    /// Get the number of proposals made by an address in the current period.
+    pub fn proposals_in_period(env: Env, address: Address) -> u32 {
+        let period_duration: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ProposalPeriodDuration)
+            .unwrap_or(10_000);
+        let current_ledger = env.ledger().sequence();
+        let current_period = current_ledger / period_duration;
+        env.storage()
+            .persistent()
+            .get(&DataKey::ProposalsInPeriod(address, current_period))
+            .unwrap_or(0)
+    }
+
     /// Get the vote reason for a specific voter on a proposal.
     pub fn get_vote_reason(env: Env, proposal_id: u64, voter: Address) -> Option<String> {
         env.storage()
