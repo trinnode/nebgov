@@ -1248,6 +1248,15 @@ impl GovernorContract {
         static_quorum
     }
 
+    /// Get the quorum required for a specific proposal.
+    ///
+    /// Returns the quorum calculated based on the total supply at the proposal's
+    /// start ledger. If dynamic quorum is enabled, returns the maximum of the
+    /// static quorum and the USD-denominated minimum quorum floor.
+    pub fn get_quorum(env: Env, proposal_id: u64) -> i128 {
+        Self::quorum(env, proposal_id)
+    }
+
     /// Get vote counts for a proposal.
     pub fn proposal_votes(env: Env, proposal_id: u64) -> (i128, i128, i128) {
         let proposal: Proposal = env

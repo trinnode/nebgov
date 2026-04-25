@@ -829,6 +829,38 @@ export class GovernorClient {
   }
 
   /**
+   * Get the quorum required for a specific proposal.
+   * The quorum is calculated based on the total supply at the proposal's start ledger.
+   */
+  async getQuorum(proposalId: bigint): Promise<bigint> {
+    const result = await this.server.simulateTransaction(
+      new TransactionBuilder(
+        await this.server.getAccount(this.config.governorAddress),
+        { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
+      )
+        .addOperation(
+          this.contract.call(
+            "get_quorum",
+            nativeToScVal(proposalId, { type: "u64" }),
+          ),
+        )
+        .setTimeout(30)
+        .build(),
+    );
+
+    if (SorobanRpc.Api.isSimulationError(result)) {
+      throw new Error(`Simulation error: ${result.error}`);
+    }
+
+    const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+      .result?.retval;
+    if (!raw) throw new Error("No return value");
+
+    const quorum = scValToNative(raw) as bigint;
+    return quorum;
+  }
+
+  /**
    * Check if an address has voted on a proposal.
    * Returns true if the address has cast a vote.
    */
