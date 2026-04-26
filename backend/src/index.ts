@@ -7,6 +7,10 @@ import competitionsRouter from "./routes/competitions";
 import leaderboardRouter from "./routes/leaderboard";
 import authRouter from "./routes/auth";
 import notificationsRouter from "./routes/notifications";
+import pino from "pino";
+import pinoHttp from "pino-http";
+import swaggerUi from "swagger-ui-express";
+import { generateOpenApiDocument } from "./openapi";
 
 dotenv.config();
 
@@ -47,6 +51,24 @@ app.use(
 );
 app.use(express.json());
 app.use(cookieParser());
+
+// Logging middleware
+const logger = pino({ level: process.env.LOG_LEVEL ?? "info" });
+app.use(
+  pinoHttp({
+    logger,
+    autoLogging: {
+      ignore: (req) => req.url === "/health",
+    },
+  }),
+);
+
+// Swagger documentation
+app.get("/openapi.json", (_req, res) => {
+  res.setHeader("Content-Type", "application/json");
+  res.send(generateOpenApiDocument());
+});
+app.use("/docs", swaggerUi.serve, swaggerUi.setup(generateOpenApiDocument()));
 
 // Health check — exempt from rate limiting
 app.get("/health", (_req, res) => {

@@ -19,3 +19,8 @@ path = "../contracts/governor"
 name = "governor_state"
 path = "fuzz_targets/governor_state.rs"
 doc = false
+
+[[bin]]
+name = "multi_action_proposal"
+path = "fuzz_targets/multi_action_proposal.rs"
+doc = false

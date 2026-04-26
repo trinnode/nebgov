@@ -245,6 +245,11 @@ export default function ProposalDetailPage({ params }: Props) {
               <p className="text-xs text-blue-700 mt-1">
                 The guardian can cancel this proposal during the veto window before execution becomes possible.
               </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Hash Mismatch Warning */}
       {hashMismatched && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6 flex gap-3">

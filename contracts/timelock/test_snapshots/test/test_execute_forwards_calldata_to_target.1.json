@@ -48,7 +48,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                 },
                 {
-                  "bytes": "03b07df31ca4bcd5754b472170dd2e99570c11b0f73d632d4ad64170ddff48e3"
+                  "bytes": "8dcfac1f4c859ccd7b21cdbb5702ab6381145bdd9c5690b2a60b5a7f99d4f6cf"
                 }
               ]
             }
@@ -80,7 +80,7 @@
                   "symbol": "Operation"
                 },
                 {
-                  "bytes": "03b07df31ca4bcd5754b472170dd2e99570c11b0f73d632d4ad64170ddff48e3"
+                  "bytes": "8dcfac1f4c859ccd7b21cdbb5702ab6381145bdd9c5690b2a60b5a7f99d4f6cf"
                 }
               ]
             },
@@ -100,7 +100,7 @@
                       "symbol": "Operation"
                     },
                     {
-                      "bytes": "03b07df31ca4bcd5754b472170dd2e99570c11b0f73d632d4ad64170ddff48e3"
+                      "bytes": "8dcfac1f4c859ccd7b21cdbb5702ab6381145bdd9c5690b2a60b5a7f99d4f6cf"
                     }
                   ]
                 },
@@ -120,7 +120,7 @@
                         "symbol": "data"
                       },
                       "val": {
-                        "bytes": ""
+                        "bytes": "000000100000000100000001000000030000002a"
                       }
                     },
                     {
@@ -144,7 +144,7 @@
                         "symbol": "fn_name"
                       },
                       "val": {
-                        "symbol": "exec"
+                        "symbol": "set_value"
                       }
                     },
                     {
@@ -332,7 +332,7 @@
           "contract_data": {
             "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4",
             "key": {
-              "symbol": "executed"
+              "symbol": "value"
             },
             "durability": "persistent"
           }
@@ -345,11 +345,11 @@
                 "ext": "v0",
                 "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4",
                 "key": {
-                  "symbol": "executed"
+                  "symbol": "value"
                 },
                 "durability": "persistent",
                 "val": {
-                  "bool": true
+                  "u32": 42
                 }
               }
             },

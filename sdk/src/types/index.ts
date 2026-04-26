@@ -30,7 +30,7 @@ export enum VoteSupport {
 
 export enum VoteType {
   Simple = "Simple",
-  Extended = "Extended", 
+  Extended = "Extended",
   Quadratic = "Quadratic",
 }
 
@@ -73,6 +73,10 @@ export interface GovernorConfig {
   rpcUrl?: string;
   /** Optional funded classic account used for read-only simulation calls. */
   simulationAccount?: string;
+  /** Maximum number of retry attempts for RPC calls (default: 3) */
+  maxAttempts?: number;
+  /** Base delay in milliseconds for exponential backoff (default: 1000) */
+  baseDelayMs?: number;
 }
 
 export interface TimelockOperation {
@@ -118,6 +122,10 @@ export interface FactoryConfig {
   factoryAddress: string;
   network: Network;
   rpcUrl?: string;
+  /** Maximum number of retry attempts for RPC calls (default: 3) */
+  maxAttempts?: number;
+  /** Base delay in milliseconds for exponential backoff (default: 1000) */
+  baseDelayMs?: number;
 }
 
 export interface GuardianActivityEntry {
@@ -213,6 +221,8 @@ export interface TreasuryConfig {
   network: Network;
   /** RPC URL override (optional — defaults to public horizon) */
   rpcUrl?: string;
+  /** Indexer base URL for off-chain queries (e.g. getBatchTransferHistory) */
+  indexerUrl?: string;
 }
 
 /** A single recipient in a batch transfer operation. */
@@ -221,4 +231,18 @@ export interface BatchTransferRecipient {
   address: string;
   /** Amount of tokens to transfer (in the token's base unit) */
   amount: bigint;
+}
+
+/** A treasury batch transfer event as returned by the indexer. */
+export interface BatchTransferEvent {
+  /** SHA-256 operation hash (hex-encoded) */
+  opHash: string;
+  /** Strkey address of the token that was transferred */
+  token: string;
+  /** Number of recipients in the batch */
+  recipientCount: number;
+  /** Total amount transferred across all recipients */
+  totalAmount: bigint;
+  /** Ledger sequence number at which the transfer was executed */
+  ledger: number;
 }

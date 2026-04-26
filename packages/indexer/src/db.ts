@@ -4,7 +4,9 @@ import dotenv from "dotenv";
 dotenv.config();
 
 export const pool = new Pool({
-  connectionString: process.env.DATABASE_URL ?? "postgres://nebgov:nebgov@localhost:5432/nebgov",
+  connectionString:
+    process.env.DATABASE_URL ??
+    "postgres://nebgov:nebgov@localhost:5432/nebgov",
 });
 
 export async function initDb(): Promise<void> {
@@ -57,6 +59,16 @@ export async function initDb(): Promise<void> {
       id SERIAL PRIMARY KEY,
       account TEXT NOT NULL,
       amount BIGINT NOT NULL,
+      ledger INT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS treasury_transfers (
+      id SERIAL PRIMARY KEY,
+      op_hash TEXT NOT NULL,
+      token TEXT NOT NULL,
+      recipient_count INT NOT NULL,
+      total_amount BIGINT NOT NULL,
       ledger INT NOT NULL,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
