@@ -137,7 +137,7 @@ Use imperative mood with conventional prefixes:
 3. Ensure all CI checks pass: `cargo test --workspace && pnpm test:sdk`
 4. Update docs if you changed any public API
 5. Open a PR referencing the issue: `Closes #<number>`
-6. Wait for maintainer review
+6. Wait for maintainer review. Note that reviewers are automatically assigned based on our [CODEOWNERS](.github/CODEOWNERS) configuration. For more details on our branch protection rules, see [Branch Protection](docs/contributing/branch-protection.md).
 
 ## Code Standards
 
