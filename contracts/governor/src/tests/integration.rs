@@ -27,6 +27,38 @@ use soroban_sdk::{
 };
 
 // ---------------------------------------------------------------------------
+// ConfigurableOracleContract — mock Reflector oracle for dynamic quorum tests.
+// Call set_price(Some(p)) before the proposal quorum is evaluated to control
+// the price the governor sees.  Pass None to simulate an unreachable oracle.
+// ---------------------------------------------------------------------------
+
+#[contracttype]
+#[derive(Clone)]
+enum OracleDataKey {
+    Price,
+}
+
+#[contract]
+pub struct ConfigurableOracleContract;
+
+#[contractimpl]
+impl ConfigurableOracleContract {
+    /// Configures the price the oracle will return on the next lastprice call.
+    /// Pass None to simulate an oracle that returns no price.
+    pub fn set_price(env: Env, price: Option<i128>) {
+        match price {
+            Some(p) => env.storage().instance().set(&OracleDataKey::Price, &p),
+            None => env.storage().instance().remove(&OracleDataKey::Price),
+        }
+    }
+
+    /// Mirrors the Reflector oracle interface.
+    pub fn lastprice(env: Env, _asset: Address) -> Option<i128> {
+        env.storage().instance().get(&OracleDataKey::Price)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // MockTarget — a minimal contract whose sole purpose is to record that it was
 // called by the governance execution path.
 // ---------------------------------------------------------------------------
@@ -972,5 +1004,235 @@ fn test_multi_token_full_lifecycle_with_three_tokens_and_quorum_gate() {
     assert_eq!(
         governor_client.state(&proposal_pass),
         ProposalState::Executed
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic quorum oracle integration tests (#253)
+// ---------------------------------------------------------------------------
+
+/// Helper: deploy a governor backed by a ConfigurableVotesContract with a
+/// known total supply, quorum numerator, and zero proposal threshold so any
+/// address can propose.
+fn setup_dynamic_quorum_governor(
+    env: &Env,
+    total_supply: i128,
+    quorum_numerator: u32,
+) -> (GovernorContractClient, ConfigurableVotesContractClient, Address, Address) {
+    let admin = Address::generate(env);
+    let guardian = Address::generate(env);
+
+    let votes_id = env.register(ConfigurableVotesContract, ());
+    let votes_client = ConfigurableVotesContractClient::new(env, &votes_id);
+    votes_client.set_total_supply(&total_supply);
+
+    let timelock_id = env.register(sorogov_timelock::TimelockContract, ());
+    let governor_id = env.register(GovernorContract, ());
+
+    let timelock_client = sorogov_timelock::TimelockContractClient::new(env, &timelock_id);
+    let governor_client = GovernorContractClient::new(env, &governor_id);
+
+    timelock_client.initialize(&admin, &governor_id, &0u64, &1_209_600u64);
+    governor_client.initialize(
+        &admin,
+        &votes_id,
+        &timelock_id,
+        &10_u32, // voting_delay
+        &20_u32, // voting_period
+        &quorum_numerator,
+        &0_i128, // proposal_threshold
+        &guardian,
+        &VoteType::Simple,
+        &120_960_u32,
+    );
+
+    (governor_client, votes_client, votes_id, admin)
+}
+
+/// Create a minimal proposal and return its ID.
+fn create_minimal_proposal(
+    env: &Env,
+    governor_client: &GovernorContractClient,
+) -> u64 {
+    let proposer = Address::generate(env);
+    let mock_target = env.register(MockTarget, ());
+
+    let description = soroban_sdk::String::from_str(env, "dynamic quorum test proposal");
+    let description_hash = env
+        .crypto()
+        .sha256(&Bytes::from_slice(env, b"dynamic-quorum-test"))
+        .into();
+    let metadata_uri = soroban_sdk::String::from_str(env, "ipfs://dynamic-quorum-test");
+
+    let mut targets = soroban_sdk::Vec::new(env);
+    targets.push_back(mock_target.clone());
+    let mut fn_names = soroban_sdk::Vec::new(env);
+    fn_names.push_back(Symbol::new(env, "exec_gov"));
+    let mut calldatas = soroban_sdk::Vec::new(env);
+    calldatas.push_back(Bytes::new(env));
+
+    governor_client.propose(
+        &proposer,
+        &description,
+        &description_hash,
+        &metadata_uri,
+        &targets,
+        &fn_names,
+        &calldatas,
+    )
+}
+
+/// dynamic quorum > static quorum → dynamic applies.
+/// dynamic quorum < static quorum → static applies (max wins).
+#[test]
+fn test_dynamic_quorum_uses_max_of_static_and_dynamic() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+
+    // total_supply = 1_000_000, quorum_numerator = 10 → static_quorum = 100_000
+    let (governor_client, _votes_client, _votes_id, _admin) =
+        setup_dynamic_quorum_governor(&env, 1_000_000, 10);
+
+    let proposal_id = create_minimal_proposal(&env, &governor_client);
+
+    // Sanity: without dynamic quorum, result is the static quorum.
+    let static_q = governor_client.quorum(&proposal_id);
+    assert_eq!(static_q, 100_000, "static quorum should be 10% of 1_000_000");
+
+    // Register a configurable oracle: price = $1 (1_000_000 in 6-decimal).
+    let oracle_id = env.register(ConfigurableOracleContract, ());
+    let oracle_client = ConfigurableOracleContractClient::new(&env, &oracle_id);
+    oracle_client.set_price(&Some(1_000_000_i128));
+
+    // Case A: usd_quorum (50) < static_quorum (100_000) → static wins.
+    // min_quorum_usd = 50 → usd_quorum = 50 / 1_000_000 = 0 (integer div, < 1)
+    governor_client.update_oracle(&Some(oracle_id.clone()), &50_i128, &true);
+    let q_static_wins = governor_client.quorum(&proposal_id);
+    assert_eq!(
+        q_static_wins, 100_000,
+        "static quorum should win when dynamic usd_quorum is smaller"
+    );
+
+    // Case B: usd_quorum > static_quorum → dynamic wins.
+    // min_quorum_usd = 200_000_000_000, price = 1_000_000
+    // usd_quorum = 200_000_000_000 / 1_000_000 = 200_000 > 100_000 → dynamic wins.
+    governor_client.update_oracle(&Some(oracle_id.clone()), &200_000_000_000_i128, &true);
+    let q_dynamic_wins = governor_client.quorum(&proposal_id);
+    assert_eq!(
+        q_dynamic_wins, 200_000,
+        "dynamic quorum should apply when usd_quorum exceeds static"
+    );
+}
+
+/// When the oracle returns a price of 0, the governor must NOT divide by zero.
+/// Instead it should fall back gracefully to the static quorum.
+#[test]
+fn test_dynamic_quorum_oracle_zero_price_falls_back_to_static() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+
+    // static_quorum = 10% of 500_000 = 50_000
+    let (governor_client, _votes_client, _votes_id, _admin) =
+        setup_dynamic_quorum_governor(&env, 500_000, 10);
+
+    let proposal_id = create_minimal_proposal(&env, &governor_client);
+
+    let oracle_id = env.register(ConfigurableOracleContract, ());
+    let oracle_client = ConfigurableOracleContractClient::new(&env, &oracle_id);
+
+    // Oracle returns a price of zero — should NOT cause a division-by-zero panic.
+    oracle_client.set_price(&Some(0_i128));
+    governor_client.update_oracle(&Some(oracle_id.clone()), &999_999_999_i128, &true);
+
+    let q = governor_client.quorum(&proposal_id);
+    assert_eq!(
+        q, 50_000,
+        "zero oracle price must fall back to static quorum, not panic"
+    );
+}
+
+/// When the oracle returns None (simulating an unreachable oracle), the
+/// governor must fall back gracefully to the static quorum.
+#[test]
+fn test_dynamic_quorum_oracle_no_price_falls_back_to_static() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+
+    // static_quorum = 20% of 1_000_000 = 200_000
+    let (governor_client, _votes_client, _votes_id, _admin) =
+        setup_dynamic_quorum_governor(&env, 1_000_000, 20);
+
+    let proposal_id = create_minimal_proposal(&env, &governor_client);
+
+    let oracle_id = env.register(ConfigurableOracleContract, ());
+    let oracle_client = ConfigurableOracleContractClient::new(&env, &oracle_id);
+
+    // Oracle returns None — no price available.
+    oracle_client.set_price(&None);
+    governor_client.update_oracle(&Some(oracle_id.clone()), &999_999_999_i128, &true);
+
+    let q = governor_client.quorum(&proposal_id);
+    assert_eq!(
+        q, 200_000,
+        "None oracle price must fall back to static quorum"
+    );
+}
+
+/// When use_dynamic_quorum is false the oracle must never be consulted;
+/// the static quorum is returned even if an oracle with a high USD floor
+/// is configured.
+#[test]
+fn test_dynamic_quorum_falls_back_to_static_when_disabled() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+
+    // static_quorum = 10% of 2_000_000 = 200_000
+    let (governor_client, _votes_client, _votes_id, _admin) =
+        setup_dynamic_quorum_governor(&env, 2_000_000, 10);
+
+    let proposal_id = create_minimal_proposal(&env, &governor_client);
+
+    let oracle_id = env.register(ConfigurableOracleContract, ());
+    let oracle_client = ConfigurableOracleContractClient::new(&env, &oracle_id);
+
+    // Even though price = $1 and min_quorum_usd is enormous (would give
+    // usd_quorum >> static_quorum), use_dynamic = false means oracle is skipped.
+    oracle_client.set_price(&Some(1_000_000_i128));
+    governor_client.update_oracle(
+        &Some(oracle_id.clone()),
+        &100_000_000_000_000_i128,
+        &false, // dynamic disabled
+    );
+
+    let q = governor_client.quorum(&proposal_id);
+    assert_eq!(
+        q, 200_000,
+        "static quorum must be used when use_dynamic_quorum is false"
+    );
+}
+
+/// Boundary values for quorum_numerator: 0 returns 0 without touching the
+/// oracle; 100 returns the full supply.
+#[test]
+fn test_quorum_denominator_boundary_values() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+
+    // --- quorum_numerator = 0 ---
+    let (governor_zero, _vc, _vid, _a) = setup_dynamic_quorum_governor(&env, 1_000_000, 0);
+    let pid_zero = create_minimal_proposal(&env, &governor_zero);
+    assert_eq!(
+        governor_zero.quorum(&pid_zero),
+        0,
+        "quorum_numerator=0 must return 0"
+    );
+
+    // --- quorum_numerator = 100 (full supply) ---
+    let (governor_full, _vc2, _vid2, _a2) = setup_dynamic_quorum_governor(&env, 1_000_000, 100);
+    let pid_full = create_minimal_proposal(&env, &governor_full);
+    assert_eq!(
+        governor_full.quorum(&pid_full),
+        1_000_000,
+        "quorum_numerator=100 must return full supply"
     );
 }

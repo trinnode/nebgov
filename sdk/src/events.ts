@@ -1,5 +1,6 @@
 import { SorobanRpc, scValToNative, xdr } from "@stellar/stellar-sdk";
 import { GovernorSettings, Network, VoteType } from "./types";
+import { withRetry } from "./utils";
 
 const RPC_URLS: Record<Network, string> = {
   mainnet: "https://soroban-rpc.mainnet.stellar.gateway.fm",
@@ -94,6 +95,10 @@ export interface SubscriptionOptions {
   network: Network;
   rpcUrl?: string;
   intervalMs?: number;
+  /** Maximum number of retry attempts for RPC calls (default: 3) */
+  maxAttempts?: number;
+  /** Base delay in milliseconds for exponential backoff (default: 1000) */
+  baseDelayMs?: number;
 }
 
 type EventRecord = Record<string, unknown>;
@@ -224,7 +229,10 @@ function createTopicSubscription(
 
     try {
       if (!initialized) {
-        const latest = await server.getLatestLedger();
+        const latest = await withRetry(async () => await server.getLatestLedger(), {
+          maxAttempts: opts.maxAttempts ?? 3,
+          baseDelayMs: opts.baseDelayMs ?? 1000,
+        });
         cursor = latest.sequence;
         initialized = true;
       }
@@ -233,7 +241,8 @@ function createTopicSubscription(
         server,
         governorAddress,
         topicFilter,
-        cursor
+        cursor,
+        { maxAttempts: opts.maxAttempts, baseDelayMs: opts.baseDelayMs }
       );
 
       for (const event of events) {
@@ -259,24 +268,33 @@ export async function fetchEvents(
   server: SorobanRpc.Server,
   contractId: string,
   topicFilter: xdr.ScVal[],
-  startLedger: number
+  startLedger: number,
+  opts: { maxAttempts?: number; baseDelayMs?: number } = {}
 ): Promise<{ events: SorobanEvent[]; latestLedger: number }> {
-  const response = await server.getEvents({
-    startLedger,
-    filters: [
-      {
-        type: "contract",
-        contractIds: [contractId],
-        topics: [topicFilter.map((segment) => segment.toXDR("base64"))],
-      },
-    ],
-    limit: 100,
-  });
+  return withRetry(async () => {
+    const response = await server.getEvents({
+      startLedger,
+      filters: [
+        {
+          type: "contract",
+          contractIds: [contractId],
+          topics: [topicFilter.map((segment) => segment.toXDR("base64"))],
+        },
+      ],
+      limit: 100,
+    });
 
-  return {
-    events: (response.events ?? []).map(decodeEvent),
-    latestLedger: response.latestLedger ? Number(response.latestLedger) : startLedger,
-  };
+    return {
+      events: (response.events ?? []).map(decodeEvent),
+      latestLedger: response.latestLedger ? Number(response.latestLedger) : startLedger,
+    };
+  }, {
+    maxAttempts: opts.maxAttempts ?? 3,
+    baseDelayMs: opts.baseDelayMs ?? 1000,
+    onRetry: (attempt, error) => {
+      console.debug(`[fetchEvents] Retry attempt ${attempt} due to error:`, error);
+    }
+  });
 }
 
 export function parseProposalCreatedEvent(
@@ -491,7 +509,10 @@ export async function getProposalEvents(
   opts: SubscriptionOptions
 ): Promise<SorobanEvent[]> {
   const server = buildServer(opts);
-  const latest = (await server.getLatestLedger()).sequence;
+  const latest = (await withRetry(async () => await server.getLatestLedger(), {
+    maxAttempts: opts.maxAttempts ?? 3,
+    baseDelayMs: opts.baseDelayMs ?? 1000,
+  })).sequence;
   const topicFilter = [xdr.ScVal.scvSymbol(TOPICS.proposalCreated)];
   const events: SorobanEvent[] = [];
   let startLedger = Math.max(1, fromLedger);
@@ -501,7 +522,8 @@ export async function getProposalEvents(
       server,
       governorAddress,
       topicFilter,
-      startLedger
+      startLedger,
+      { maxAttempts: opts.maxAttempts, baseDelayMs: opts.baseDelayMs }
     );
 
     if (page.length === 0) {

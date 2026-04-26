@@ -18,6 +18,7 @@ import {
   DelegatorInfo,
 } from "./types";
 import { VotesError, VotesErrorCode, parseVotesError } from "./errors";
+import { withRetry, isNetworkError } from "./utils";
 
 const RPC_URLS: Record<Network, string> = {
   mainnet: "https://soroban-rpc.mainnet.stellar.gateway.fm",
@@ -42,123 +43,155 @@ const DEFAULT_SCAN_WINDOW = 17_280;
  * Handles delegation, voting power queries, and governance health analytics.
  */
 export class VotesClient {
-  private readonly config: GovernorConfig;
   private readonly server: SorobanRpc.Server;
   private readonly contract: Contract;
   private readonly networkPassphrase: string;
 
-  constructor(config: GovernorConfig) {
-    this.config = config;
+  constructor(private readonly config: GovernorConfig) {
     const rpcUrl = config.rpcUrl ?? RPC_URLS[config.network];
     this.server = new SorobanRpc.Server(rpcUrl, { allowHttp: false });
     this.contract = new Contract(config.votesAddress);
     this.networkPassphrase = NETWORK_PASSPHRASES[config.network];
   }
 
+  private async retry<T>(
+    fn: () => Promise<T>,
+    filter?: (e: unknown) => boolean,
+  ): Promise<T> {
+    return withRetry(fn, {
+      maxAttempts: this.config.maxAttempts,
+      baseDelayMs: this.config.baseDelayMs,
+      retryOn: filter ?? isNetworkError,
+    });
+  }
+
+  private isRetryableSubmissionError(e: unknown): boolean {
+    if (isNetworkError(e)) return true;
+    if (e instanceof VotesError) {
+      // Don't retry on contract logic errors (codes < 100)
+      return (
+        e.code >= 100 &&
+        e.code !== VotesErrorCode.TransactionFailed &&
+        e.code !== VotesErrorCode.DelegationFailed
+      );
+    }
+    const msg = String(e);
+    if (msg.includes("TransactionAlreadyInMempool")) return false;
+    return false;
+  }
+
   /**
    * Revoke delegation and remove voting power from the previous delegatee.
    */
   async revokeDelegation(signer: Keypair): Promise<void> {
-    const account = await this.server.getAccount(signer.publicKey());
+    return this.retry(async () => {
+      const account = await this.server.getAccount(signer.publicKey());
 
-    const tx = new TransactionBuilder(account, {
-      fee: BASE_FEE,
-      networkPassphrase: this.networkPassphrase,
-    })
-      .addOperation(
-        this.contract.call(
-          "revoke_delegation",
-          nativeToScVal(signer.publicKey(), { type: "address" }),
-        ),
-      )
-      .setTimeout(30)
-      .build();
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "revoke_delegation",
+            nativeToScVal(signer.publicKey(), { type: "address" }),
+          ),
+        )
+        .setTimeout(30)
+        .build();
 
-    const prepared = await this.server.prepareTransaction(tx);
-    prepared.sign(signer);
-    const result = await this.server.sendTransaction(prepared);
-    if (result.status === "ERROR") {
-      throw parseVotesError(result);
-    }
+      const prepared = await this.server.prepareTransaction(tx);
+      prepared.sign(signer);
+      const result = await this.server.sendTransaction(prepared);
+      if (result.status === "ERROR") {
+        throw parseVotesError(result);
+      }
+    }, (e) => this.isRetryableSubmissionError(e));
   }
 
   /**
    * Delegate voting power to another address (or self-delegate).
    */
   async delegate(signer: Keypair, delegatee: string): Promise<void> {
-    const account = await this.server.getAccount(signer.publicKey());
+    return this.retry(async () => {
+      const account = await this.server.getAccount(signer.publicKey());
 
-    const tx = new TransactionBuilder(account, {
-      fee: BASE_FEE,
-      networkPassphrase: this.networkPassphrase,
-    })
-      .addOperation(
-        this.contract.call(
-          "delegate",
-          nativeToScVal(signer.publicKey(), { type: "address" }),
-          nativeToScVal(delegatee, { type: "address" }),
-        ),
-      )
-      .setTimeout(30)
-      .build();
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "delegate",
+            nativeToScVal(signer.publicKey(), { type: "address" }),
+            nativeToScVal(delegatee, { type: "address" }),
+          ),
+        )
+        .setTimeout(30)
+        .build();
 
-    const prepared = await this.server.prepareTransaction(tx);
-    prepared.sign(signer);
-    const result = await this.server.sendTransaction(prepared);
-    if (result.status === "ERROR") {
-      throw parseVotesError(result);
-    }
+      const prepared = await this.server.prepareTransaction(tx);
+      prepared.sign(signer);
+      const result = await this.server.sendTransaction(prepared);
+      if (result.status === "ERROR") {
+        throw parseVotesError(result);
+      }
+    }, (e) => this.isRetryableSubmissionError(e));
   }
 
   /**
    * Get current voting power of an address.
    */
   async getVotes(account: string): Promise<bigint> {
-    const result = await this.server.simulateTransaction(
-      new TransactionBuilder(await this.server.getAccount(this.readAccount(account)), {
-        fee: BASE_FEE,
-        networkPassphrase: this.networkPassphrase,
-      })
-        .addOperation(
-          this.contract.call(
-            "get_votes",
-            nativeToScVal(account, { type: "address" }),
-          ),
-        )
-        .setTimeout(30)
-        .build(),
-    );
+    return this.retry(async () => {
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(await this.server.getAccount(this.readAccount(account)), {
+          fee: BASE_FEE,
+          networkPassphrase: this.networkPassphrase,
+        })
+          .addOperation(
+            this.contract.call(
+              "get_votes",
+              nativeToScVal(account, { type: "address" }),
+            ),
+          )
+          .setTimeout(30)
+          .build(),
+      );
 
-    if (SorobanRpc.Api.isSimulationError(result)) return 0n;
-    const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
-      .result?.retval;
-    return raw ? BigInt(scValToNative(raw)) : 0n;
+      if (SorobanRpc.Api.isSimulationError(result)) return 0n;
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      return raw ? BigInt(scValToNative(raw)) : 0n;
+    });
   }
 
   /**
    * Get voting power at a past ledger sequence.
    */
   async getPastVotes(account: string, ledger: number): Promise<bigint> {
-    const result = await this.server.simulateTransaction(
-      new TransactionBuilder(await this.server.getAccount(this.readAccount(account)), {
-        fee: BASE_FEE,
-        networkPassphrase: this.networkPassphrase,
-      })
-        .addOperation(
-          this.contract.call(
-            "get_past_votes",
-            nativeToScVal(account, { type: "address" }),
-            nativeToScVal(ledger, { type: "u32" }),
-          ),
-        )
-        .setTimeout(30)
-        .build(),
-    );
+    return this.retry(async () => {
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(await this.server.getAccount(this.readAccount(account)), {
+          fee: BASE_FEE,
+          networkPassphrase: this.networkPassphrase,
+        })
+          .addOperation(
+            this.contract.call(
+              "get_past_votes",
+              nativeToScVal(account, { type: "address" }),
+              nativeToScVal(ledger, { type: "u32" }),
+            ),
+          )
+          .setTimeout(30)
+          .build(),
+      );
 
-    if (SorobanRpc.Api.isSimulationError(result)) return 0n;
-    const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
-      .result?.retval;
-    return raw ? BigInt(scValToNative(raw)) : 0n;
+      if (SorobanRpc.Api.isSimulationError(result)) return 0n;
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      return raw ? BigInt(scValToNative(raw)) : 0n;
+    });
   }
 
   /**
@@ -216,70 +249,76 @@ export class VotesClient {
    * Get current delegatee of an account.
    */
   async getDelegatee(account: string): Promise<string | null> {
-    const result = await this.server.simulateTransaction(
-      new TransactionBuilder(await this.server.getAccount(this.readAccount(account)), {
-        fee: BASE_FEE,
-        networkPassphrase: this.networkPassphrase,
-      })
-        .addOperation(
-          this.contract.call(
-            "delegates",
-            nativeToScVal(account, { type: "address" }),
-          ),
-        )
-        .setTimeout(30)
-        .build(),
-    );
+    return this.retry(async () => {
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(await this.server.getAccount(this.readAccount(account)), {
+          fee: BASE_FEE,
+          networkPassphrase: this.networkPassphrase,
+        })
+          .addOperation(
+            this.contract.call(
+              "delegates",
+              nativeToScVal(account, { type: "address" }),
+            ),
+          )
+          .setTimeout(30)
+          .build(),
+      );
 
-    if (SorobanRpc.Api.isSimulationError(result)) return null;
-    const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
-      .result?.retval;
-    return raw ? (scValToNative(raw) as string) : null;
+      if (SorobanRpc.Api.isSimulationError(result)) return null;
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      return raw ? (scValToNative(raw) as string) : null;
+    });
   }
 
   /**
    * Get total supply of the voting token.
    */
   async getTotalSupply(): Promise<bigint> {
-    const result = await this.server.simulateTransaction(
-      new TransactionBuilder(
-        await this.server.getAccount(this.readAccount()),
-        { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
-      )
-        .addOperation(this.contract.call("total_supply"))
-        .setTimeout(30)
-        .build(),
-    );
+    return this.retry(async () => {
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(
+          await this.server.getAccount(this.readAccount()),
+          { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
+        )
+          .addOperation(this.contract.call("total_supply"))
+          .setTimeout(30)
+          .build(),
+      );
 
-    if (SorobanRpc.Api.isSimulationError(result)) return 0n;
-    const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
-      .result?.retval;
-    return raw ? BigInt(scValToNative(raw)) : 0n;
+      if (SorobanRpc.Api.isSimulationError(result)) return 0n;
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      return raw ? BigInt(scValToNative(raw)) : 0n;
+    });
   }
 
   /**
    * Get total delegated supply at a past ledger sequence.
    */
   async getPastTotalSupply(ledger: number): Promise<bigint> {
-    const result = await this.server.simulateTransaction(
-      new TransactionBuilder(
-        await this.server.getAccount(this.readAccount()),
-        { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
-      )
-        .addOperation(
-          this.contract.call(
-            "get_past_total_supply",
-            nativeToScVal(ledger, { type: "u32" }),
-          ),
+    return this.retry(async () => {
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(
+          await this.server.getAccount(this.readAccount()),
+          { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
         )
-        .setTimeout(30)
-        .build(),
-    );
+          .addOperation(
+            this.contract.call(
+              "get_past_total_supply",
+              nativeToScVal(ledger, { type: "u32" }),
+            ),
+          )
+          .setTimeout(30)
+          .build(),
+      );
 
-    if (SorobanRpc.Api.isSimulationError(result)) return 0n;
-    const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
-      .result?.retval;
-    return raw ? BigInt(scValToNative(raw)) : 0n;
+      if (SorobanRpc.Api.isSimulationError(result)) return 0n;
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      return raw ? BigInt(scValToNative(raw)) : 0n;
+    });
   }
 
   /**
@@ -474,27 +513,29 @@ export class VotesClient {
     expiry: bigint,
     signature: Buffer,
   ): Promise<void> {
-    const account = await this.server.getAccount(this.contract.contractId());
+    return this.retry(async () => {
+      const account = await this.server.getAccount(this.contract.contractId());
 
-    const tx = new TransactionBuilder(account, {
-      fee: BASE_FEE,
-      networkPassphrase: this.networkPassphrase,
-    })
-      .addOperation(
-        this.contract.call(
-          "delegate_by_sig",
-          nativeToScVal(owner, { type: "address" }),
-          nativeToScVal(delegatee, { type: "address" }),
-          nativeToScVal(nonce, { type: "u64" }),
-          nativeToScVal(expiry, { type: "u64" }),
-          nativeToScVal(signature, { type: "bytes" }),
-        ),
-      )
-      .setTimeout(30)
-      .build();
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "delegate_by_sig",
+            nativeToScVal(owner, { type: "address" }),
+            nativeToScVal(delegatee, { type: "address" }),
+            nativeToScVal(nonce, { type: "u64" }),
+            nativeToScVal(expiry, { type: "u64" }),
+            nativeToScVal(signature, { type: "bytes" }),
+          ),
+        )
+        .setTimeout(30)
+        .build();
 
-    const prepared = await this.server.prepareTransaction(tx);
-    await this.server.sendTransaction(prepared);
+      const prepared = await this.server.prepareTransaction(tx);
+      await this.server.sendTransaction(prepared);
+    }, (e) => this.isRetryableSubmissionError(e));
   }
 
   /**
@@ -667,7 +708,7 @@ export class VotesClient {
   ): Promise<Map<string, string>> {
     let startLedger = fromLedger;
     if (startLedger === undefined) {
-      const info = await this.server.getLatestLedger();
+      const info = await this.retry(() => this.server.getLatestLedger());
       startLedger = Math.max(1, info.sequence - DEFAULT_SCAN_WINDOW);
     }
 
@@ -683,17 +724,19 @@ export class VotesClient {
       const latest = (await this.server.getLatestLedger()).sequence;
 
       while (cursor <= latest) {
-        const response = await this.server.getEvents({
-          startLedger: cursor,
-          filters: [
-            {
-              type: "contract",
-              contractIds: [contractId],
-              topics: [topicFilter.map((v) => v.toXDR("base64"))],
-            },
-          ],
-          limit: 100,
-        });
+        const response = await this.retry(() =>
+          this.server.getEvents({
+            startLedger: cursor,
+            filters: [
+              {
+                type: "contract",
+                contractIds: [contractId],
+                topics: [topicFilter.map((v) => v.toXDR("base64"))],
+              },
+            ],
+            limit: 100,
+          }),
+        );
 
         const events = response.events ?? [];
         let maxLedger = cursor;

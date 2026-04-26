@@ -94,6 +94,7 @@ describe("TimelockClient", () => {
         mockKeypair,
         validCAddr,
         Buffer.from("calldata"),
+        "exec",
         86400n
       );
 
@@ -108,11 +109,11 @@ describe("TimelockClient", () => {
       });
 
       await expect(
-        client.schedule(mockKeypair, validCAddr, Buffer.from("calldata"), 86400n)
+        client.schedule(mockKeypair, validCAddr, Buffer.from("calldata"), "exec", 86400n)
       ).rejects.toThrow(TimelockError);
 
       try {
-        await client.schedule(mockKeypair, validCAddr, Buffer.from("calldata"), 86400n);
+        await client.schedule(mockKeypair, validCAddr, Buffer.from("calldata"), "exec", 86400n);
       } catch (e) {
         expect((e as TimelockError).code).toBe(TimelockErrorCode.TransactionFailed);
         expect((e as TimelockError).message).toContain("Transaction failed");
@@ -125,11 +126,11 @@ describe("TimelockClient", () => {
       });
 
       await expect(
-        client.schedule(mockKeypair, validCAddr, Buffer.from("calldata"), 86400n)
+        client.schedule(mockKeypair, validCAddr, Buffer.from("calldata"), "exec", 86400n)
       ).rejects.toThrow(TimelockError);
 
       try {
-        await client.schedule(mockKeypair, validCAddr, Buffer.from("calldata"), 86400n);
+        await client.schedule(mockKeypair, validCAddr, Buffer.from("calldata"), "exec", 86400n);
       } catch (e) {
         expect((e as TimelockError).code).toBe(TimelockErrorCode.MissingReturnValue);
       }
@@ -141,11 +142,11 @@ describe("TimelockClient", () => {
       });
 
       await expect(
-        client.schedule(mockKeypair, validCAddr, Buffer.from("calldata"), 86400n)
+        client.schedule(mockKeypair, validCAddr, Buffer.from("calldata"), "exec", 86400n)
       ).rejects.toThrow(TimelockError);
 
       try {
-        await client.schedule(mockKeypair, validCAddr, Buffer.from("calldata"), 86400n);
+        await client.schedule(mockKeypair, validCAddr, Buffer.from("calldata"), "exec", 86400n);
       } catch (e) {
         expect((e as TimelockError).code).toBe(TimelockErrorCode.TransactionFailed);
         expect((e as TimelockError).message).toContain("Transaction failed");
@@ -159,11 +160,11 @@ describe("TimelockClient", () => {
       });
 
       await expect(
-        client.schedule(mockKeypair, validCAddr, Buffer.from("calldata"), 100n)
+        client.schedule(mockKeypair, validCAddr, Buffer.from("calldata"), "exec", 100n)
       ).rejects.toThrow(TimelockError);
 
       try {
-        await client.schedule(mockKeypair, validCAddr, Buffer.from("calldata"), 100n);
+        await client.schedule(mockKeypair, validCAddr, Buffer.from("calldata"), "exec", 100n);
       } catch (e) {
         expect((e as TimelockError).code).toBe(TimelockErrorCode.TransactionFailed);
       }

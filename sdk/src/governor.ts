@@ -25,8 +25,20 @@ import {
   Network,
   UnknownProposalStateError,
 } from "./types";
+
+/** Options for uploading proposal metadata to IPFS. */
+export interface MetadataUploadOptions {
+  /** Pinata API Key (JWT or API Key) */
+  pinataApiKey?: string;
+  /** Pinata Secret Key (if using API Key/Secret pair) */
+  pinataSecretKey?: string;
+  /** web3.storage API token */
+  web3StorageToken?: string;
+  /** Custom uploader function for other IPFS gateways */
+  customUploader?: (content: string) => Promise<string>;
+}
 import { GovernorError, GovernorErrorCode } from "./errors";
-import { hexToBytes32 } from "./utils";
+import { hexToBytes32, withRetry } from "./utils";
 
 const RPC_URLS: Record<Network, string> = {
   mainnet: "https://soroban-rpc.mainnet.stellar.gateway.fm",
@@ -100,6 +112,57 @@ export class GovernorClient {
     this.networkPassphrase = NETWORK_PASSPHRASES[config.network];
   }
 
+  private async retry<T>(
+    fn: () => Promise<T>,
+    retryOn?: (e: unknown) => boolean,
+  ): Promise<T> {
+    return withRetry(fn, {
+      maxAttempts: this.config.maxAttempts ?? 3,
+      baseDelayMs: this.config.baseDelayMs ?? 1000,
+      retryOn,
+      onRetry: (attempt, error) => {
+        console.debug(`[GovernorClient] Retry attempt ${attempt} due to error:`, error);
+      },
+    });
+  }
+
+  private isNetworkError(e: unknown): boolean {
+    if (e instanceof Error) {
+      const msg = e.message.toLowerCase();
+      if (
+        msg.includes("fetch") ||
+        msg.includes("network") ||
+        msg.includes("timeout") ||
+        msg.includes("aborted") ||
+        msg.includes("connection refused") ||
+        msg.includes("econnrefused") ||
+        msg.includes("500") ||
+        msg.includes("502") ||
+        msg.includes("503") ||
+        msg.includes("504")
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private isRetryableSubmissionError(e: unknown): boolean {
+    if (this.isNetworkError(e)) return true;
+
+    // Do not retry on contract errors (parsed as GovernorError with code < 100)
+    if (e instanceof GovernorError && e.code < 100) {
+      return false;
+    }
+
+    // Do not retry if already in mempool (idempotency check)
+    if (e instanceof Error && e.message.includes("TransactionAlreadyInMempool")) {
+      return false;
+    }
+
+    return false;
+  }
+
   /**
    * Create a new governance proposal (multi-action, matching on-chain `propose`).
    *
@@ -121,76 +184,78 @@ export class GovernorClient {
     fnNamesArg?: string[],
     calldatasArg?: (Buffer | Uint8Array)[],
   ): Promise<bigint> {
-    const legacyCall = Array.isArray(descriptionHashOrTargets);
-    const descriptionHash = legacyCall
-      ? "0".repeat(64)
-      : descriptionHashOrTargets;
-    const metadataUri = legacyCall ? "" : (metadataUriOrFnNames as string);
-    const targets = legacyCall
-      ? descriptionHashOrTargets
-      : (targetsOrCalldatas as string[]);
-    const fnNames = legacyCall ? (metadataUriOrFnNames as string[]) : fnNamesArg;
-    const calldatas = legacyCall
-      ? (targetsOrCalldatas as (Buffer | Uint8Array)[])
-      : calldatasArg;
+    return this.retry(async () => {
+      const legacyCall = Array.isArray(descriptionHashOrTargets);
+      const descriptionHash = legacyCall
+        ? "0".repeat(64)
+        : descriptionHashOrTargets;
+      const metadataUri = legacyCall ? "" : (metadataUriOrFnNames as string);
+      const targets = legacyCall
+        ? descriptionHashOrTargets
+        : (targetsOrCalldatas as string[]);
+      const fnNames = legacyCall ? (metadataUriOrFnNames as string[]) : fnNamesArg;
+      const calldatas = legacyCall
+        ? (targetsOrCalldatas as (Buffer | Uint8Array)[])
+        : calldatasArg;
 
-    if (!fnNames || !calldatas) {
-      throw new GovernorError(
-        GovernorErrorCode.InvalidArguments,
-        "targets, fnNames, and calldatas are required",
-      );
-    }
-    if (
-      targets.length !== fnNames.length ||
-      targets.length !== calldatas.length
-    ) {
-      throw new GovernorError(
-        GovernorErrorCode.InvalidArguments,
-        "targets, fnNames, and calldatas must have the same length",
-      );
-    }
-    if (targets.length === 0) {
-      throw new GovernorError(
-        GovernorErrorCode.InvalidArguments,
-        "At least one on-chain action is required",
-      );
-    }
+      if (!fnNames || !calldatas) {
+        throw new GovernorError(
+          GovernorErrorCode.InvalidArguments,
+          "targets, fnNames, and calldatas are required",
+        );
+      }
+      if (
+        targets.length !== fnNames.length ||
+        targets.length !== calldatas.length
+      ) {
+        throw new GovernorError(
+          GovernorErrorCode.InvalidArguments,
+          "targets, fnNames, and calldatas must have the same length",
+        );
+      }
+      if (targets.length === 0) {
+        throw new GovernorError(
+          GovernorErrorCode.InvalidArguments,
+          "At least one on-chain action is required",
+        );
+      }
 
-    // Convert hex string to BytesN<32>
-    const hashBytes = hexToBytes32(descriptionHash);
+      // Convert hex string to BytesN<32>
+      const hashBytes = hexToBytes32(descriptionHash);
 
-    const account = await this.server.getAccount(signer.publicKey());
+      const account = await this.server.getAccount(signer.publicKey());
 
-    const tx = new TransactionBuilder(account, {
-      fee: BASE_FEE,
-      networkPassphrase: this.networkPassphrase,
-    })
-      .addOperation(
-        this.contract.call(
-          "propose",
-          nativeToScVal(signer.publicKey(), { type: "address" }),
-          nativeToScVal(description, { type: "string" }),
-          nativeToScVal(hashBytes, { type: "bytes" }),
-          nativeToScVal(metadataUri, { type: "string" }),
-          scVecAddress(targets),
-          scVecSymbol(fnNames),
-          scVecBytes(calldatas),
-        ),
-      )
-      .setTimeout(30)
-      .build();
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "propose",
+            nativeToScVal(signer.publicKey(), { type: "address" }),
+            nativeToScVal(description, { type: "string" }),
+            nativeToScVal(hashBytes, { type: "bytes" }),
+            nativeToScVal(metadataUri, { type: "string" }),
+            scVecAddress(targets),
+            scVecSymbol(fnNames),
+            scVecBytes(calldatas),
+          ),
+        )
+        .setTimeout(30)
+        .build();
 
-    const prepared = await this.server.prepareTransaction(tx);
-    prepared.sign(signer);
+      const prepared = await this.server.prepareTransaction(tx);
+      prepared.sign(signer);
 
-    const result = await this.server.sendTransaction(prepared);
-    if (result.status === "ERROR") {
-      throw new Error(`Transaction failed: ${JSON.stringify(result)}`);
-    }
+      const result = await this.server.sendTransaction(prepared);
+      if (result.status === "ERROR") {
+        throw new Error(`Transaction failed: ${JSON.stringify(result)}`);
+      }
 
-    const confirmed = await this.pollForConfirmation(result.hash);
-    const returnVal = confirmed.returnValue;
-    return returnVal ? BigInt(scValToNative(returnVal)) : 0n;
+      const confirmed = await this.pollForConfirmation(result.hash);
+      const returnVal = confirmed.returnValue;
+      return returnVal ? BigInt(scValToNative(returnVal)) : 0n;
+    }, (e) => this.isRetryableSubmissionError(e));
   }
 
   /**
@@ -257,74 +322,78 @@ export class GovernorClient {
 
   /** Minimum voting power required to create a proposal (`proposal_threshold`). */
   async proposalThreshold(): Promise<bigint> {
-    const result = await this.server.simulateTransaction(
-      new TransactionBuilder(
-        await this.server.getAccount(this.readAccount()),
-        { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
-      )
-        .addOperation(this.contract.call("proposal_threshold"))
-        .setTimeout(30)
-        .build(),
-    );
+    return this.retry(async () => {
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(
+          await this.server.getAccount(this.readAccount()),
+          { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
+        )
+          .addOperation(this.contract.call("proposal_threshold"))
+          .setTimeout(30)
+          .build(),
+      );
 
-    if (SorobanRpc.Api.isSimulationError(result)) return 0n;
-    const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
-      .result?.retval;
-    return raw ? BigInt(scValToNative(raw) as number | bigint | string) : 0n;
+      if (SorobanRpc.Api.isSimulationError(result)) return 0n;
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      return raw ? BigInt(scValToNative(raw) as number | bigint | string) : 0n;
+    });
   }
 
   /** Read the full governor settings struct via `get_settings()`. */
   async getSettings(
     sourceAccount?: string,
   ): Promise<GovernorSettings> {
-    const readAccount = this.readAccount(sourceAccount);
-    const result = await this.server.simulateTransaction(
-      new TransactionBuilder(await this.server.getAccount(readAccount), {
-        fee: BASE_FEE,
-        networkPassphrase: this.networkPassphrase,
-      })
-        .addOperation(this.contract.call("get_settings"))
-        .setTimeout(30)
-        .build(),
-    );
+    return this.retry(async () => {
+      const readAccount = this.readAccount(sourceAccount);
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(await this.server.getAccount(readAccount), {
+          fee: BASE_FEE,
+          networkPassphrase: this.networkPassphrase,
+        })
+          .addOperation(this.contract.call("get_settings"))
+          .setTimeout(30)
+          .build(),
+      );
 
-    if (SorobanRpc.Api.isSimulationError(result)) {
-      throw new Error(`Simulation error: ${result.error}`);
-    }
+      if (SorobanRpc.Api.isSimulationError(result)) {
+        throw new Error(`Simulation error: ${result.error}`);
+      }
 
-    const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
-      .result?.retval;
-    if (!raw) throw new Error("No settings return value");
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      if (!raw) throw new Error("No settings return value");
 
-    const native = scValToNative(raw) as Record<string, unknown>;
-    const voteTypeRaw = native.vote_type;
-    const voteTypeValue = Array.isArray(voteTypeRaw)
-      ? String(voteTypeRaw[0] ?? "")
-      : String(voteTypeRaw ?? "");
-    const voteType =
-      voteTypeValue === VoteType.Simple ||
-      voteTypeValue === VoteType.Quadratic
-        ? (voteTypeValue as VoteType)
-        : VoteType.Extended;
+      const native = scValToNative(raw) as Record<string, unknown>;
+      const voteTypeRaw = native.vote_type;
+      const voteTypeValue = Array.isArray(voteTypeRaw)
+        ? String(voteTypeRaw[0] ?? "")
+        : String(voteTypeRaw ?? "");
+      const voteType =
+        voteTypeValue === VoteType.Simple ||
+        voteTypeValue === VoteType.Quadratic
+          ? (voteTypeValue as VoteType)
+          : VoteType.Extended;
 
-    return {
-      votingDelay: Number(native.voting_delay ?? 0),
-      votingPeriod: Number(native.voting_period ?? 0),
-      quorumNumerator: Number(native.quorum_numerator ?? 0),
-      proposalThreshold: toBigInt(native.proposal_threshold),
-      guardian: String(native.guardian ?? ""),
-      voteType,
-      proposalGracePeriod: Number(native.proposal_grace_period ?? 0),
-      useDynamicQuorum: Boolean(native.use_dynamic_quorum ?? false),
-      reflectorOracle: native.reflector_oracle
-        ? String(native.reflector_oracle)
-        : null,
-      minQuorumUsd: toBigInt(native.min_quorum_usd),
-      maxCalldataSize: Number(native.max_calldata_size ?? 10_000),
-      proposalCooldown: Number(native.proposal_cooldown ?? 100),
-      maxProposalsPerPeriod: Number(native.max_proposals_per_period ?? 5),
-      proposalPeriodDuration: Number(native.proposal_period_duration ?? 10_000),
-    };
+      return {
+        votingDelay: Number(native.voting_delay ?? 0),
+        votingPeriod: Number(native.voting_period ?? 0),
+        quorumNumerator: Number(native.quorum_numerator ?? 0),
+        proposalThreshold: toBigInt(native.proposal_threshold),
+        guardian: String(native.guardian ?? ""),
+        voteType,
+        proposalGracePeriod: Number(native.proposal_grace_period ?? 0),
+        useDynamicQuorum: Boolean(native.use_dynamic_quorum ?? false),
+        reflectorOracle: native.reflector_oracle
+          ? String(native.reflector_oracle)
+          : null,
+        minQuorumUsd: toBigInt(native.min_quorum_usd),
+        maxCalldataSize: Number(native.max_calldata_size ?? 10_000),
+        proposalCooldown: Number(native.proposal_cooldown ?? 100),
+        maxProposalsPerPeriod: Number(native.max_proposals_per_period ?? 5),
+        proposalPeriodDuration: Number(native.proposal_period_duration ?? 10_000),
+      };
+    });
   }
 
   /**
@@ -341,30 +410,32 @@ export class GovernorClient {
     cpuInsns?: string;
     memBytes?: string;
   }> {
-    const target = new Contract(contractId);
-    const op = target.call(functionName, ...args);
-    const result = await this.server.simulateTransaction(
-      new TransactionBuilder(
-        await this.server.getAccount(footprintSourceAccount),
-        { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
-      )
-        .addOperation(op)
-        .setTimeout(30)
-        .build(),
-    );
+    return this.retry(async () => {
+      const target = new Contract(contractId);
+      const op = target.call(functionName, ...args);
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(
+          await this.server.getAccount(footprintSourceAccount),
+          { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
+        )
+          .addOperation(op)
+          .setTimeout(30)
+          .build(),
+      );
 
-    if (SorobanRpc.Api.isSimulationError(result)) {
-      const err = result as unknown as { error?: string };
-      return { ok: false, error: err.error ?? "Simulation failed" };
-    }
-    const ok = result as SorobanRpc.Api.SimulateTransactionSuccessResponse & {
-      cost?: { cpuInsns?: string; memBytes?: string };
-    };
-    return {
-      ok: true,
-      cpuInsns: ok.cost?.cpuInsns,
-      memBytes: ok.cost?.memBytes,
-    };
+      if (SorobanRpc.Api.isSimulationError(result)) {
+        const err = result as unknown as { error?: string };
+        return { ok: false, error: err.error ?? "Simulation failed" };
+      }
+      const ok = result as SorobanRpc.Api.SimulateTransactionSuccessResponse & {
+        cost?: { cpuInsns?: string; memBytes?: string };
+      };
+      return {
+        ok: true,
+        cpuInsns: ok.cost?.cpuInsns,
+        memBytes: ok.cost?.memBytes,
+      };
+    });
   }
 
   /**
@@ -374,57 +445,59 @@ export class GovernorClient {
     actions: ProposalAction[],
     sourceAccount?: string,
   ): Promise<ProposalSimulationResult> {
-    const readAccount = this.readAccount(sourceAccount);
-    try {
-      let computeUnits = 0;
-      const stateChanges: unknown[] = [];
+    return this.retry(async () => {
+      try {
+        let computeUnits = 0;
+        const stateChanges: unknown[] = [];
 
-      for (const action of actions) {
-        const target = new Contract(action.target);
-        const op = target.call(
-          action.function,
-          ...action.args.map((arg) => nativeToScVal(arg)),
-        );
-        const result = await this.server.simulateTransaction(
-          new TransactionBuilder(
-            await this.server.getAccount(readAccount),
-            { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
-          )
-            .addOperation(op)
-            .setTimeout(30)
-            .build(),
-        );
+        for (const action of actions) {
+          const target = new Contract(action.target);
+          const op = target.call(
+            action.function,
+            ...action.args.map((arg) => nativeToScVal(arg)),
+          );
+          const readAccount = this.readAccount(sourceAccount);
+      const result = await this.server.simulateTransaction(
+            new TransactionBuilder(
+              await this.server.getAccount(readAccount),
+              { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
+            )
+              .addOperation(op)
+              .setTimeout(30)
+              .build(),
+          );
 
-        if (SorobanRpc.Api.isSimulationError(result)) {
-          const err = result as unknown as { error?: string };
-          return {
-            success: false,
-            error: `Simulation failed: ${err.error ?? "unknown"}`,
+          if (SorobanRpc.Api.isSimulationError(result)) {
+            const err = result as unknown as { error?: string };
+            return {
+              success: false,
+              error: `Simulation failed: ${err.error ?? "unknown"}`,
+            };
+          }
+
+          const success = result as SorobanRpc.Api.SimulateTransactionSuccessResponse & {
+            result?: { cost?: { cpuInstructions?: number } } | null;
+            cost?: { cpuInstructions?: number; cpuInsns?: string };
           };
+          if (!success.result) {
+            return { success: false, error: "No simulation result returned" };
+          }
+
+          const cost =
+            success.result.cost?.cpuInstructions ??
+            success.cost?.cpuInstructions ??
+            Number(success.cost?.cpuInsns ?? 0);
+          computeUnits += Number(cost ?? 0);
         }
 
-        const success = result as SorobanRpc.Api.SimulateTransactionSuccessResponse & {
-          result?: { cost?: { cpuInstructions?: number } } | null;
-          cost?: { cpuInstructions?: number; cpuInsns?: string };
+        return { success: true, computeUnits, stateChanges };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : "Simulation failed",
         };
-        if (!success.result) {
-          return { success: false, error: "No simulation result returned" };
-        }
-
-        const cost =
-          success.result.cost?.cpuInstructions ??
-          success.cost?.cpuInstructions ??
-          Number(success.cost?.cpuInsns ?? 0);
-        computeUnits += Number(cost ?? 0);
       }
-
-      return { success: true, computeUnits, stateChanges };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : "Simulation failed",
-      };
-    }
+    });
   }
 
   /** Resource hints for the full `propose` transaction (simulation only). */
@@ -442,47 +515,49 @@ export class GovernorClient {
     cpuInsns?: string;
     memBytes?: string;
   }> {
-    try {
-      const hashBytes = hexToBytes32(descriptionHash);
-      const account = await this.server.getAccount(proposer);
-      const tx = new TransactionBuilder(account, {
-        fee: BASE_FEE,
-        networkPassphrase: this.networkPassphrase,
-      })
-        .addOperation(
-          this.contract.call(
-            "propose",
-            nativeToScVal(proposer, { type: "address" }),
-            nativeToScVal(description, { type: "string" }),
-            nativeToScVal(hashBytes, { type: "bytes" }),
-            nativeToScVal(metadataUri, { type: "string" }),
-            scVecAddress(targets),
-            scVecSymbol(fnNames),
-            scVecBytes(calldatas),
-          ),
-        )
-        .setTimeout(30)
-        .build();
+    return this.retry(async () => {
+      try {
+        const hashBytes = hexToBytes32(descriptionHash);
+        const account = await this.server.getAccount(proposer);
+        const tx = new TransactionBuilder(account, {
+          fee: BASE_FEE,
+          networkPassphrase: this.networkPassphrase,
+        })
+          .addOperation(
+            this.contract.call(
+              "propose",
+              nativeToScVal(proposer, { type: "address" }),
+              nativeToScVal(description, { type: "string" }),
+              nativeToScVal(hashBytes, { type: "bytes" }),
+              nativeToScVal(metadataUri, { type: "string" }),
+              scVecAddress(targets),
+              scVecSymbol(fnNames),
+              scVecBytes(calldatas),
+            ),
+          )
+          .setTimeout(30)
+          .build();
 
-      const result = await this.server.simulateTransaction(tx);
-      if (SorobanRpc.Api.isSimulationError(result)) {
-        const err = result as unknown as { error?: string };
-        return { ok: false, error: err.error ?? "Simulation failed" };
+        const result = await this.server.simulateTransaction(tx);
+        if (SorobanRpc.Api.isSimulationError(result)) {
+          const err = result as unknown as { error?: string };
+          return { ok: false, error: err.error ?? "Simulation failed" };
+        }
+        const ok = result as SorobanRpc.Api.SimulateTransactionSuccessResponse & {
+          cost?: { cpuInsns?: string; memBytes?: string };
+        };
+        return {
+          ok: true,
+          cpuInsns: ok.cost?.cpuInsns,
+          memBytes: ok.cost?.memBytes,
+        };
+      } catch (e: unknown) {
+        return {
+          ok: false,
+          error: e instanceof Error ? e.message : "estimate failed",
+        };
       }
-      const ok = result as SorobanRpc.Api.SimulateTransactionSuccessResponse & {
-        cost?: { cpuInsns?: string; memBytes?: string };
-      };
-      return {
-        ok: true,
-        cpuInsns: ok.cost?.cpuInsns,
-        memBytes: ok.cost?.memBytes,
-      };
-    } catch (e: unknown) {
-      return {
-        ok: false,
-        error: e instanceof Error ? e.message : "estimate failed",
-      };
-    }
+    });
   }
 
   /**
@@ -496,52 +571,54 @@ export class GovernorClient {
     proposalId: bigint,
     sourceAccount?: string,
   ): Promise<ExecutionGasEstimate> {
-    const account = await this.server.getAccount(this.readAccount(sourceAccount));
-    const tx = new TransactionBuilder(account, {
-      fee: BASE_FEE,
-      networkPassphrase: this.networkPassphrase,
-    })
-      .addOperation(
-        this.contract.call(
-          "estimate_execution_gas",
-          nativeToScVal(proposalId, { type: "u64" }),
+    return this.retry(async () => {
+      const account = await this.server.getAccount(this.readAccount(sourceAccount));
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "estimate_execution_gas",
+            nativeToScVal(proposalId, { type: "u64" }),
+          ),
+        )
+        .setTimeout(30)
+        .build();
+
+      const result = await this.server.simulateTransaction(tx);
+      if (SorobanRpc.Api.isSimulationError(result)) {
+        throw new Error(`Simulation error: ${result.error}`);
+      }
+
+      const success = result as SorobanRpc.Api.SimulateTransactionSuccessResponse & {
+        cost?: Record<string, unknown>;
+      };
+      const raw = success.result?.retval;
+      if (!raw) throw new Error("No return value");
+
+      const native = scValToNative(raw) as Record<string, unknown>;
+      return {
+        proposalId: toBigInt(native.proposal_id ?? native.proposalId),
+        actionCount: Number(native.action_count ?? native.actionCount ?? 0),
+        calldataBytes: Number(native.calldata_bytes ?? native.calldataBytes ?? 0),
+        estimatedCpuInsns: toBigInt(
+          native.estimated_cpu_insns ?? native.estimatedCpuInsns,
         ),
-      )
-      .setTimeout(30)
-      .build();
-
-    const result = await this.server.simulateTransaction(tx);
-    if (SorobanRpc.Api.isSimulationError(result)) {
-      throw new Error(`Simulation error: ${result.error}`);
-    }
-
-    const success = result as SorobanRpc.Api.SimulateTransactionSuccessResponse & {
-      cost?: Record<string, unknown>;
-    };
-    const raw = success.result?.retval;
-    if (!raw) throw new Error("No return value");
-
-    const native = scValToNative(raw) as Record<string, unknown>;
-    return {
-      proposalId: toBigInt(native.proposal_id ?? native.proposalId),
-      actionCount: Number(native.action_count ?? native.actionCount ?? 0),
-      calldataBytes: Number(native.calldata_bytes ?? native.calldataBytes ?? 0),
-      estimatedCpuInsns: toBigInt(
-        native.estimated_cpu_insns ?? native.estimatedCpuInsns,
-      ),
-      estimatedMemBytes: toBigInt(
-        native.estimated_mem_bytes ?? native.estimatedMemBytes,
-      ),
-      estimatedFeeStroops: toBigInt(
-        native.estimated_fee_stroops ?? native.estimatedFeeStroops,
-      ),
-      rpcCpuInsns: simulationCostValue(
-        success.cost,
-        "cpuInsns",
-        "cpuInstructions",
-      ),
-      rpcMemBytes: simulationCostValue(success.cost, "memBytes", "memoryBytes"),
-    };
+        estimatedMemBytes: toBigInt(
+          native.estimated_mem_bytes ?? native.estimatedMemBytes,
+        ),
+        estimatedFeeStroops: toBigInt(
+          native.estimated_fee_stroops ?? native.estimatedFeeStroops,
+        ),
+        rpcCpuInsns: simulationCostValue(
+          success.cost,
+          "cpuInsns",
+          "cpuInstructions",
+        ),
+        rpcMemBytes: simulationCostValue(success.cost, "memBytes", "memoryBytes"),
+      };
+    });
   }
 
   /**
@@ -552,34 +629,36 @@ export class GovernorClient {
     proposalId: bigint,
     support: VoteSupport,
   ): Promise<void> {
-    const account = await this.server.getAccount(signer.publicKey());
+    return this.retry(async () => {
+      const account = await this.server.getAccount(signer.publicKey());
 
-    const supportScVal = xdr.ScVal.scvVec([
-      xdr.ScVal.scvSymbol(VoteSupport[support]),
-    ]);
+      const supportScVal = xdr.ScVal.scvVec([
+        xdr.ScVal.scvSymbol(VoteSupport[support]),
+      ]);
 
-    const tx = new TransactionBuilder(account, {
-      fee: BASE_FEE,
-      networkPassphrase: this.networkPassphrase,
-    })
-      .addOperation(
-        this.contract.call(
-          "cast_vote",
-          nativeToScVal(signer.publicKey(), { type: "address" }),
-          nativeToScVal(proposalId, { type: "u64" }),
-          supportScVal,
-        ),
-      )
-      .setTimeout(30)
-      .build();
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "cast_vote",
+            nativeToScVal(signer.publicKey(), { type: "address" }),
+            nativeToScVal(proposalId, { type: "u64" }),
+            supportScVal,
+          ),
+        )
+        .setTimeout(30)
+        .build();
 
-    const prepared = await this.server.prepareTransaction(tx);
-    prepared.sign(signer);
-    const result = await this.server.sendTransaction(prepared);
-    if (result.status === "ERROR") {
-      throw new Error(`castVote failed: ${JSON.stringify(result)}`);
-    }
-    await this.pollForConfirmation(result.hash);
+      const prepared = await this.server.prepareTransaction(tx);
+      prepared.sign(signer);
+      const result = await this.server.sendTransaction(prepared);
+      if (result.status === "ERROR") {
+        throw new Error(`castVote failed: ${JSON.stringify(result)}`);
+      }
+      await this.pollForConfirmation(result.hash);
+    }, (e) => this.isRetryableSubmissionError(e));
   }
 
   /**
@@ -629,31 +708,33 @@ export class GovernorClient {
     signer: Keypair,
     proposalId: bigint,
   ): Promise<void> {
-    const account = await this.server.getAccount(signer.publicKey());
+    return this.retry(async () => {
+      const account = await this.server.getAccount(signer.publicKey());
 
-    const tx = new TransactionBuilder(account, {
-      fee: BASE_FEE,
-      networkPassphrase: this.networkPassphrase,
-    })
-      .addOperation(
-        this.contract.call(
-          "cancel",
-          nativeToScVal(signer.publicKey(), { type: "address" }),
-          nativeToScVal(proposalId, { type: "u64" }),
-        ),
-      )
-      .setTimeout(30)
-      .build();
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "cancel",
+            nativeToScVal(signer.publicKey(), { type: "address" }),
+            nativeToScVal(proposalId, { type: "u64" }),
+          ),
+        )
+        .setTimeout(30)
+        .build();
 
-    const prepared = await this.server.prepareTransaction(tx);
-    prepared.sign(signer);
+      const prepared = await this.server.prepareTransaction(tx);
+      prepared.sign(signer);
 
-    const result = await this.server.sendTransaction(prepared);
-    if (result.status === "ERROR") {
-      throw new Error(`Transaction failed: ${JSON.stringify(result)}`);
-    }
+      const result = await this.server.sendTransaction(prepared);
+      if (result.status === "ERROR") {
+        throw new Error(`Transaction failed: ${JSON.stringify(result)}`);
+      }
 
-    await this.pollForConfirmation(result.hash);
+      await this.pollForConfirmation(result.hash);
+    }, (e) => this.isRetryableSubmissionError(e));
   }
 
   /**
@@ -668,30 +749,32 @@ export class GovernorClient {
     signer: Keypair,
     proposalId: bigint,
   ): Promise<void> {
-    const account = await this.server.getAccount(signer.publicKey());
+    return this.retry(async () => {
+      const account = await this.server.getAccount(signer.publicKey());
 
-    const tx = new TransactionBuilder(account, {
-      fee: BASE_FEE,
-      networkPassphrase: this.networkPassphrase,
-    })
-      .addOperation(
-        this.contract.call(
-          "cancel_by_governance",
-          nativeToScVal(proposalId, { type: "u64" }),
-        ),
-      )
-      .setTimeout(30)
-      .build();
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "cancel_by_governance",
+            nativeToScVal(proposalId, { type: "u64" }),
+          ),
+        )
+        .setTimeout(30)
+        .build();
 
-    const prepared = await this.server.prepareTransaction(tx);
-    prepared.sign(signer);
+      const prepared = await this.server.prepareTransaction(tx);
+      prepared.sign(signer);
 
-    const result = await this.server.sendTransaction(prepared);
-    if (result.status === "ERROR") {
-      throw new Error(`Transaction failed: ${JSON.stringify(result)}`);
-    }
+      const result = await this.server.sendTransaction(prepared);
+      if (result.status === "ERROR") {
+        throw new Error(`Transaction failed: ${JSON.stringify(result)}`);
+      }
 
-    await this.pollForConfirmation(result.hash);
+      await this.pollForConfirmation(result.hash);
+    }, (e) => this.isRetryableSubmissionError(e));
   }
 
   /**
@@ -737,30 +820,32 @@ export class GovernorClient {
    * TODO issue #17: decode all 7 ProposalState variants.
    */
   async getProposalState(proposalId: bigint): Promise<ProposalState> {
-    const result = await this.server.simulateTransaction(
-      new TransactionBuilder(
-        await this.server.getAccount(this.readAccount()),
-        { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
-      )
-        .addOperation(
-          this.contract.call(
-            "state",
-            nativeToScVal(proposalId, { type: "u64" }),
-          ),
+    return this.retry(async () => {
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(
+          await this.server.getAccount(this.readAccount()),
+          { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
         )
-        .setTimeout(30)
-        .build(),
-    );
+          .addOperation(
+            this.contract.call(
+              "state",
+              nativeToScVal(proposalId, { type: "u64" }),
+            ),
+          )
+          .setTimeout(30)
+          .build(),
+      );
 
-    if (SorobanRpc.Api.isSimulationError(result)) {
-      throw new Error(`Simulation error: ${result.error}`);
-    }
+      if (SorobanRpc.Api.isSimulationError(result)) {
+        throw new Error(`Simulation error: ${result.error}`);
+      }
 
-    const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
-      .result?.retval;
-    if (!raw) throw new Error("No return value");
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      if (!raw) throw new Error("No return value");
 
-    return this.decodeProposalState(raw);
+      return this.decodeProposalState(raw);
+    });
   }
 
   /**
@@ -797,35 +882,37 @@ export class GovernorClient {
    * Get vote breakdown for a proposal.
    */
   async getProposalVotes(proposalId: bigint): Promise<ProposalVotes> {
-    const result = await this.server.simulateTransaction(
-      new TransactionBuilder(
-        await this.server.getAccount(this.readAccount()),
-        { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
-      )
-        .addOperation(
-          this.contract.call(
-            "proposal_votes",
-            nativeToScVal(proposalId, { type: "u64" }),
-          ),
+    return this.retry(async () => {
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(
+          await this.server.getAccount(this.readAccount()),
+          { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
         )
-        .setTimeout(30)
-        .build(),
-    );
+          .addOperation(
+            this.contract.call(
+              "proposal_votes",
+              nativeToScVal(proposalId, { type: "u64" }),
+            ),
+          )
+          .setTimeout(30)
+          .build(),
+      );
 
-    if (SorobanRpc.Api.isSimulationError(result)) {
-      throw new Error(`Simulation error: ${result.error}`);
-    }
+      if (SorobanRpc.Api.isSimulationError(result)) {
+        throw new Error(`Simulation error: ${result.error}`);
+      }
 
-    const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
-      .result?.retval;
-    if (!raw) throw new Error("No return value");
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      if (!raw) throw new Error("No return value");
 
-    const [votesFor, votesAgainst, votesAbstain] = scValToNative(raw) as [
-      bigint,
-      bigint,
-      bigint,
-    ];
-    return { votesFor, votesAgainst, votesAbstain };
+      const [votesFor, votesAgainst, votesAbstain] = scValToNative(raw) as [
+        bigint,
+        bigint,
+        bigint,
+      ];
+      return { votesFor, votesAgainst, votesAbstain };
+    });
   }
 
   /**
@@ -865,39 +952,43 @@ export class GovernorClient {
    * Returns true if the address has cast a vote.
    */
   async hasVoted(proposalId: bigint, voter: string): Promise<boolean> {
-    try {
-      const result = await this.server.simulateTransaction(
-        new TransactionBuilder(
-          await this.server.getAccount(this.readAccount()),
-          { fee: BASE_FEE, networkPassphrase: this.networkPassphrase }
-        )
-          .addOperation(
-            this.contract.call(
-              "has_voted",
-              nativeToScVal(proposalId, { type: "u64" }),
-              nativeToScVal(voter, { type: "address" })
-            )
+    return this.retry(async () => {
+      try {
+        const result = await this.server.simulateTransaction(
+          new TransactionBuilder(
+            await this.server.getAccount(this.readAccount()),
+            { fee: BASE_FEE, networkPassphrase: this.networkPassphrase }
           )
-          .setTimeout(30)
-          .build()
-      );
+            .addOperation(
+              this.contract.call(
+                "has_voted",
+                nativeToScVal(proposalId, { type: "u64" }),
+                nativeToScVal(voter, { type: "address" })
+              )
+            )
+            .setTimeout(30)
+            .build()
+        );
 
-      if (SorobanRpc.Api.isSimulationError(result)) {
+        if (SorobanRpc.Api.isSimulationError(result)) {
+          return false;
+        }
+
+        const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+          .result?.retval;
+        return raw ? Boolean(scValToNative(raw)) : false;
+      } catch {
         return false;
       }
-
-      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
-        .result?.retval;
-      return raw ? Boolean(scValToNative(raw)) : false;
-    } catch {
-      return false;
-    }
+    });
   }
 
   /** Current Soroban ledger sequence from the RPC backing this client. */
   async getLatestLedger(): Promise<number> {
-    const info = await this.server.getLatestLedger();
-    return info.sequence;
+    return this.retry(async () => {
+      const info = await this.server.getLatestLedger();
+      return info.sequence;
+    });
   }
 
   /**
@@ -939,21 +1030,23 @@ export class GovernorClient {
    * Get total number of proposals.
    */
   async proposalCount(): Promise<bigint> {
-    const result = await this.server.simulateTransaction(
-      new TransactionBuilder(
-        await this.server.getAccount(this.readAccount()),
-        { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
-      )
-        .addOperation(this.contract.call("proposal_count"))
-        .setTimeout(30)
-        .build(),
-    );
+    return this.retry(async () => {
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(
+          await this.server.getAccount(this.readAccount()),
+          { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
+        )
+          .addOperation(this.contract.call("proposal_count"))
+          .setTimeout(30)
+          .build(),
+      );
 
-    if (SorobanRpc.Api.isSimulationError(result)) return 0n;
+      if (SorobanRpc.Api.isSimulationError(result)) return 0n;
 
-    const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
-      .result?.retval;
-    return raw ? BigInt(scValToNative(raw)) : 0n;
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      return raw ? BigInt(scValToNative(raw)) : 0n;
+    });
   }
 
   async getProposalExpiryLedger(proposalId: bigint): Promise<number> {
@@ -982,19 +1075,21 @@ export class GovernorClient {
     }[] = [];
 
     let cursor = fromLedger ?? 1;
-    const latest = (await this.server.getLatestLedger()).sequence;
+    const latest = await this.getLatestLedger();
 
     while (cursor <= latest) {
-      const response = await this.server.getEvents({
-        startLedger: cursor,
-        filters: [
-          {
-            type: "contract",
-            contractIds: [contractId],
-            topics: [topicFilter.map((v) => v.toXDR("base64"))],
-          },
-        ],
-        limit: 100,
+      const response = await this.retry(async () => {
+        return await this.server.getEvents({
+          startLedger: cursor,
+          filters: [
+            {
+              type: "contract",
+              contractIds: [contractId],
+              topics: [topicFilter.map((v) => v.toXDR("base64"))],
+            },
+          ],
+          limit: 100,
+        });
       });
 
       const events = response.events ?? [];
@@ -1023,6 +1118,99 @@ export class GovernorClient {
     return results;
   }
 
+  async getLastProposalLedger(address: string): Promise<number> {
+    return this.retry(async () => {
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(
+          await this.server.getAccount(this.config.governorAddress),
+          { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
+        )
+          .addOperation(
+            this.contract.call(
+              "last_proposal_ledger",
+              nativeToScVal(address, { type: "address" }),
+            ),
+          )
+          .setTimeout(30)
+          .build(),
+      );
+      if (SorobanRpc.Api.isSimulationError(result)) return 0;
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      return raw ? Number(scValToNative(raw)) : 0;
+    });
+  }
+
+  async getProposalsInPeriod(address: string): Promise<number> {
+    return this.retry(async () => {
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(
+          await this.server.getAccount(this.config.governorAddress),
+          { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
+        )
+          .addOperation(
+            this.contract.call(
+              "proposals_in_period",
+              nativeToScVal(address, { type: "address" }),
+            ),
+          )
+          .setTimeout(30)
+          .build(),
+      );
+      if (SorobanRpc.Api.isSimulationError(result)) return 0;
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      return raw ? Number(scValToNative(raw)) : 0;
+    });
+  }
+
+  /**
+   * Check if an address is allowed to create a new proposal.
+   *
+   * Verifies the proposal cooldown and period-based rate limits.
+   */
+  async canPropose(address: string): Promise<{
+    canPropose: boolean;
+    reason?: string;
+    availableAtLedger?: number;
+  }> {
+    return this.retry(async () => {
+      const settings = await this.getSettings();
+      const lastProposalLedger = await this.getLastProposalLedger(address);
+      const proposalsInPeriod = await this.getProposalsInPeriod(address);
+      const currentLedger = await this.getLatestLedger();
+
+      // Check cooldown
+      const cooldown = settings.proposalCooldown ?? 0;
+      if (lastProposalLedger > 0 && cooldown > 0) {
+        const nextAvailable = lastProposalLedger + cooldown;
+        if (currentLedger < nextAvailable) {
+          return {
+            canPropose: false,
+            reason: `Proposal cooldown active. Please wait ${nextAvailable - currentLedger} more ledgers.`,
+            availableAtLedger: nextAvailable,
+          };
+        }
+      }
+
+      // Check period limit
+      const maxProposals = settings.maxProposalsPerPeriod ?? 0;
+      const periodDuration = settings.proposalPeriodDuration ?? 0;
+      if (maxProposals > 0 && periodDuration > 0 && proposalsInPeriod >= maxProposals) {
+        const nextPeriodStart =
+          (Math.floor(currentLedger / periodDuration) + 1) *
+          periodDuration;
+        return {
+          canPropose: false,
+          reason: `Proposal limit reached for current period (${maxProposals} max).`,
+          availableAtLedger: nextPeriodStart,
+        };
+      }
+
+      return { canPropose: true };
+    });
+  }
+
   /**
    * Get the voting receipt for a specific voter on a proposal.
    *
@@ -1037,64 +1225,66 @@ export class GovernorClient {
     weight: bigint;
     reason: string;
   }> {
-    const result = await this.server.simulateTransaction(
-      new TransactionBuilder(
-        await this.server.getAccount(this.readAccount()),
-        { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
-      )
-        .addOperation(
-          this.contract.call(
-            "get_receipt",
-            nativeToScVal(proposalId, { type: "u64" }),
-            nativeToScVal(voter, { type: "address" }),
-          ),
+    return this.retry(async () => {
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(
+          await this.server.getAccount(this.readAccount()),
+          { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
         )
-        .setTimeout(30)
-        .build(),
-    );
+          .addOperation(
+            this.contract.call(
+              "get_receipt",
+              nativeToScVal(proposalId, { type: "u64" }),
+              nativeToScVal(voter, { type: "address" }),
+            ),
+          )
+          .setTimeout(30)
+          .build(),
+      );
 
-    if (SorobanRpc.Api.isSimulationError(result)) {
-      return {
-        hasVoted: false,
-        support: VoteSupport.Against,
-        weight: 0n,
-        reason: "",
+      if (SorobanRpc.Api.isSimulationError(result)) {
+        return {
+          hasVoted: false,
+          support: VoteSupport.Against,
+          weight: 0n,
+          reason: "",
+        };
+      }
+
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      if (!raw) {
+        return {
+          hasVoted: false,
+          support: VoteSupport.Against,
+          weight: 0n,
+          reason: "",
+        };
+      }
+
+      const receipt = scValToNative(raw) as {
+        has_voted: boolean;
+        support: string[];
+        weight: bigint;
+        reason: string;
       };
-    }
 
-    const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
-      .result?.retval;
-    if (!raw) {
-      return {
-        hasVoted: false,
-        support: VoteSupport.Against,
-        weight: 0n,
-        reason: "",
+      // Decode support enum (vector-wrapped symbol)
+      const supportMap: Record<string, VoteSupport> = {
+        Against: VoteSupport.Against,
+        For: VoteSupport.For,
+        Abstain: VoteSupport.Abstain,
       };
-    }
+      const supportVariant = receipt.support[0];
+      const support = supportMap[supportVariant] ?? VoteSupport.Against;
 
-    const receipt = scValToNative(raw) as {
-      has_voted: boolean;
-      support: string[];
-      weight: bigint;
-      reason: string;
-    };
-
-    // Decode support enum (vector-wrapped symbol)
-    const supportMap: Record<string, VoteSupport> = {
-      Against: VoteSupport.Against,
-      For: VoteSupport.For,
-      Abstain: VoteSupport.Abstain,
-    };
-    const supportVariant = receipt.support[0];
-    const support = supportMap[supportVariant] ?? VoteSupport.Against;
-
-    return {
-      hasVoted: receipt.has_voted,
-      support,
-      weight: BigInt(receipt.weight),
-      reason: receipt.reason,
-    };
+      return {
+        hasVoted: receipt.has_voted,
+        support,
+        weight: BigInt(receipt.weight),
+        reason: receipt.reason,
+      };
+    });
   }
 
   /**
@@ -1265,27 +1455,29 @@ export class GovernorClient {
    * Fetch a proposal by its ID.
    */
   async getProposal(proposalId: bigint): Promise<Proposal> {
-    const result = await this.server.simulateTransaction(
-      new TransactionBuilder(
-        await this.server.getAccount(this.readAccount()),
-        { fee: BASE_FEE, networkPassphrase: this.networkPassphrase }
-      )
-        .addOperation(
-          this.contract.call("get_proposal", nativeToScVal(proposalId, { type: "u64" }))
+    return this.retry(async () => {
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(
+          await this.server.getAccount(this.readAccount()),
+          { fee: BASE_FEE, networkPassphrase: this.networkPassphrase }
         )
-        .setTimeout(30)
-        .build()
-    );
+          .addOperation(
+            this.contract.call("get_proposal", nativeToScVal(proposalId, { type: "u64" }))
+          )
+          .setTimeout(30)
+          .build()
+      );
 
-    if (SorobanRpc.Api.isSimulationError(result)) {
-      throw new Error(`Simulation error: ${result.error}`);
-    }
+      if (SorobanRpc.Api.isSimulationError(result)) {
+        throw new Error(`Simulation error: ${result.error}`);
+      }
 
-    const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
-      .result?.retval;
-    if (!raw) throw new Error("No return value");
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      if (!raw) throw new Error("No return value");
 
-    return scValToNative(raw) as Proposal;
+      return scValToNative(raw) as Proposal;
+    });
   }
 }
 
@@ -1345,4 +1537,72 @@ export function hashDescriptionSync(text: string): string {
   }
 
   throw new Error("Synchronous SHA-256 is only available in Node.js environments. Use async hashDescription instead.");
+}
+
+/**
+ * Upload proposal description to IPFS and compute its SHA-256 hash.
+ *
+ * This helper simplifies the "Step 1" of creating a proposal by handling
+ * the IPFS pinning (via Pinata or custom uploader) and generating the
+ * description_hash required by the governor contract.
+ *
+ * @param description - The full text description of the proposal
+ * @param options - Upload credentials and provider selection
+ * @returns The IPFS URI (ipfs://...) and hex-encoded SHA-256 hash
+ */
+export async function uploadProposalMetadata(
+  description: string,
+  options: MetadataUploadOptions,
+): Promise<{ uri: string; hash: string }> {
+  const hash = await hashDescription(description);
+  let uri = "";
+
+  if (options.customUploader) {
+    uri = await options.customUploader(description);
+  } else if (options.pinataApiKey) {
+    // Pinata API implementation
+    // We use the JSON pinning endpoint: https://api.pinata.cloud/pinning/pinJSONToIPFS
+    const body = {
+      pinataContent: {
+        description,
+        version: "1.0",
+      },
+      pinataMetadata: {
+        name: `nebgov-proposal-${hash.substring(0, 8)}`,
+      },
+    };
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+
+    if (options.pinataSecretKey) {
+      // Legacy API Key + Secret pair
+      headers["pinata_api_key"] = options.pinataApiKey;
+      headers["pinata_secret_api_key"] = options.pinataSecretKey;
+    } else {
+      // Modern JWT
+      headers["Authorization"] = `Bearer ${options.pinataApiKey}`;
+    }
+
+    const response = await fetch("https://api.pinata.cloud/pinning/pinJSONToIPFS", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Pinata upload failed: ${response.status} ${errorText}`);
+    }
+
+    const data = (await response.json()) as { IpfsHash: string };
+    uri = `ipfs://${data.IpfsHash}`;
+  } else if (options.web3StorageToken) {
+    throw new Error("web3.storage support not yet implemented");
+  } else {
+    throw new Error("No IPFS upload provider configured in options");
+  }
+
+  return { uri, hash };
 }

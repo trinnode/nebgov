@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, useCallback } from "react";
-import { VoteSupport, ProposalState, VotesClient, GovernorClient, type Network } from "@nebgov/sdk";
+import { VoteSupport, ProposalState, VotesClient, GovernorClient, VoteType, type GovernorSettings, type Network } from "@nebgov/sdk";
 import { AlertTriangle, Info, ExternalLink, Loader2 } from "lucide-react";
 import { useWallet } from "../../../lib/wallet-context";
 import { DelegateModal } from "../../../components/DelegateModal";
@@ -58,6 +58,7 @@ export default function ProposalDetailPage({ params }: Props) {
   const [voteSuccess, setVoteSuccess] = useState(false);
   const [voteError, setVoteError] = useState<string | null>(null);
   const [votedSupport, setVotedSupport] = useState<VoteSupport | null>(null);
+  const [voteType, setVoteType] = useState<VoteType>(VoteType.Simple);
 
   const { publicKey, isConnected, signTransaction } = useWallet();
   const { theme } = useTheme();
@@ -103,6 +104,11 @@ export default function ProposalDetailPage({ params }: Props) {
   useEffect(() => {
     loadProposal();
   }, [loadProposal]);
+
+  useEffect(() => {
+    if (!governorClient) return;
+    governorClient.getSettings().then((s: GovernorSettings) => setVoteType(s.voteType)).catch(() => {});
+  }, [governorClient]);
 
   const loadMetadata = useCallback(async () => {
     if (!proposal.metadataUri) return;
@@ -239,6 +245,11 @@ export default function ProposalDetailPage({ params }: Props) {
               <p className="text-xs text-blue-700 mt-1">
                 The guardian can cancel this proposal during the veto window before execution becomes possible.
               </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Hash Mismatch Warning */}
       {hashMismatched && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6 flex gap-3">
@@ -328,9 +339,20 @@ export default function ProposalDetailPage({ params }: Props) {
 
       {/* Vote bars */}
       <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6 mb-6 space-y-4">
-        <h2 className="text-sm font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide">
-          Current Votes
-        </h2>
+        <div className="flex items-center gap-2">
+          <h2 className="text-sm font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide">
+            Current Votes
+          </h2>
+          <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+            voteType === VoteType.Quadratic
+              ? "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300"
+              : voteType === VoteType.Extended
+              ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300"
+              : "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300"
+          }`}>
+            {voteType}
+          </span>
+        </div>
 
         <div className="h-48 w-full mt-4">
           <ResponsiveContainer width="100%" height="100%">
@@ -483,6 +505,7 @@ export default function ProposalDetailPage({ params }: Props) {
         proposalId={proposalId}
         preselectedSupport={selectedSupport}
         votingPower={votingPower}
+        voteType={voteType}
         onVoted={() => {
           setVoted(true);
           loadProposal();

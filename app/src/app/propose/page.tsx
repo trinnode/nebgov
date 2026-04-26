@@ -2,7 +2,6 @@
 
 /**
  * Create proposal page with simulation support.
- * TODO issue #44: add calldata encoder for on-chain execution targets.
  * Four-step proposal wizard: basics → actions (optional) → review → success.
  * Updated with SHA-256 hashing and metadata URI support.
  */
@@ -17,8 +16,8 @@ import {
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import ReactMarkdown from "react-markdown";
-import { ChevronDown, ChevronUp, Share2, Loader2, Hash, Link as LinkIcon, FileText, AlertCircle } from "lucide-react";
-import { GovernorClient, VotesClient, hashDescription, type Network } from "@nebgov/sdk";
+import { ChevronDown, ChevronUp, Share2, Loader2, Link as LinkIcon, AlertCircle } from "lucide-react";
+import { GovernorClient, VotesClient, hashDescription, uploadProposalMetadata } from "@nebgov/sdk";
 import {
   calldataArgRowToScVal,
   encodeGovernorCalldataBytes,
@@ -27,107 +26,145 @@ import {
 } from "../../lib/treasury-calldata";
 import { useWallet } from "../../lib/wallet-context";
 
-interface ProposalAction {
+// Wizard Constants
+const TITLE_MIN = 10;
+const TITLE_MAX = 100;
+const DESC_MIN = 20;
+const STORAGE_KEY = "nebgov_proposal_draft";
+
+const STEPS = [
+  { id: 1, label: "Content" },
+  { id: 2, label: "Actions" },
+  { id: 3, label: "Review" },
+  { id: 4, label: "Success" },
+];
+
+interface WizardAction {
+  id: string;
   target: string;
-  function: string;
-  args: any[];
+  fnName: string;
+  args: CalldataArgRow[];
+  simulateOk: boolean | null;
+  simulateError?: string;
 }
 
-interface SimulationResult {
-  success: boolean;
-  computeUnits?: number;
-  stateChanges?: any[];
-  error?: string;
+interface DraftState {
+  title: string;
+  description: string;
+  descriptionHash: string;
+  ipfsRef: string;
+  actions: WizardAction[];
 }
 
-export default function ProposePage() {
-  const router = useRouter();
-  const [description, setDescription] = useState("");
-  const [target, setTarget] = useState("");
-  const [functionName, setFunctionName] = useState("");
-  const [args, setArgs] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [simulating, setSimulating] = useState(false);
-  const [simulationResult, setSimulationResult] = useState<SimulationResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const parseArgs = (argsString: string): any[] => {
-    if (!argsString.trim()) return [];
-    try {
-      return JSON.parse(argsString);
-    } catch {
-      return argsString.split(',').map(arg => arg.trim());
-    }
+function newAction(): WizardAction {
+  return {
+    id: Math.random().toString(36).substring(7),
+    target: "",
+    fnName: "",
+    args: [],
+    simulateOk: null,
   };
+}
 
-  const getErrorMessage = (error: string): string => {
-    if (error.includes("insufficient fee")) {
-      return "Transaction fee is too low. Please increase the fee.";
-    }
-    if (error.includes("invalid address")) {
-      return "Invalid contract address provided.";
-    }
-    if (error.includes("no such function")) {
-      return "The specified function doesn't exist on the target contract.";
-    }
-    if (error.includes("invalid args")) {
-      return "The function arguments are invalid or malformed.";
-    }
-    return error;
-  };
+// Helpers
+function isReasonableIpfsRef(s: string): boolean {
+  if (!s) return true; // Optional
+  const v = s.trim().toLowerCase();
+  return (
+    v.startsWith("ipfs://") ||
+    v.startsWith("http://") ||
+    v.startsWith("https://") ||
+    (v.length >= 46 && !v.includes(" ")) // CID check
+  );
+}
 
-  async function handleSimulation(e: React.FormEvent) {
-    e.preventDefault();
-    if (!description.trim() || !target.trim() || !functionName.trim()) return;
+function buildDescription(title: string, desc: string, ipfs: string): string {
+  // We store the title + description content on-chain as a single string
+  // and we also store the IPFS link for rich metadata access.
+  return `${title}\n\n${desc}`;
+}
 
-    setSimulating(true);
-    setSimulationResult(null);
-    setError(null);
+function buildPayload(actions: WizardAction[], governorAddress: string) {
+  const targets: string[] = [];
+  const fnNames: string[] = [];
+  const calldatas: Uint8Array[] = [];
 
-    try {
-      const actions: ProposalAction[] = [{
-        target: target.trim(),
-        function: functionName.trim(),
-        args: parseArgs(args)
-      }];
-
-      // TODO: Replace with actual GovernorClient.simulateProposal call
-      console.log("Simulating proposal:", { description, actions });
-      
-      // Mock simulation result for now
-      await new Promise((r) => setTimeout(r, 1000));
-      
-      const mockResult: SimulationResult = {
-        success: true,
-        computeUnits: 125000,
-        stateChanges: []
-      };
-      
-      setSimulationResult(mockResult);
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : "Unknown error";
-      setSimulationResult({
-        success: false,
-        error: getErrorMessage(errorMessage)
-      });
-    } finally {
-      setSimulating(false);
-    }
+  for (const a of actions) {
+    targets.push(a.target.trim() || governorAddress);
+    fnNames.push(a.fnName.trim() || "proposal_count"); // Placeholder if empty
+    calldatas.push(encodeGovernorCalldataBytes(a.args));
   }
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!description.trim() || !target.trim() || !functionName.trim()) return;
+  // If no actions, we still need a signal action for the governor to accept the proposal
+  if (targets.length === 0) {
+    targets.push(governorAddress);
+    fnNames.push("proposal_count");
+    calldatas.push(new Uint8Array(0));
+  }
 
-    // Check if simulation was successful
-    if (!simulationResult?.success) {
-      setError("Please run and pass simulation before submitting the proposal.");
-      return;
+  return { targets, fnNames, calldatas };
+}
+
+function getActionCalldataHex(args: CalldataArgRow[]): string {
+  try {
+    const bytes = encodeGovernorCalldataBytes(args);
+    if (bytes.length === 0) return "0x";
+    return "0x" + Buffer.from(bytes).toString("hex");
+  } catch {
+    return "Encoding error";
+  }
+}
+
+function ProposeWizardInner() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const { isConnected, publicKey, clients, signTransaction } = useWallet();
+
+  const stepParam = searchParams.get("step");
+  const successIdParam = searchParams.get("id");
+  const step = Number(stepParam) || 1;
+
+  const [hydrated, setHydrated] = useState(false);
+  const [draft, setDraft] = useState<DraftState>({
+    title: "",
+    description: "",
+    descriptionHash: "",
+    ipfsRef: "",
+    actions: [],
+  });
+
+  const [isHashing, setIsHashing] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [stepErrors, setStepErrors] = useState<string[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // Simulation / review data
+  const [votes, setVotes] = useState<bigint | null>(null);
+  const [threshold, setThreshold] = useState<bigint | null>(null);
+  const [canProposeResult, setCanProposeResult] = useState<{ canPropose: boolean; reason?: string; availableAtLedger?: number } | null>(null);
+  const [estimate, setEstimate] = useState<{ cpuInsns: bigint; memBytes: bigint } | null>(null);
+  const [estimateErr, setEstimateErr] = useState<string | null>(null);
+  const [simBusy, setSimBusy] = useState<string | null>(null);
+
+  const reviewDataReady = votes !== null && threshold !== null && canProposeResult !== null && estimate !== null;
+
+  // Hydration / Persistence
+  useEffect(() => {
+    const saved = sessionStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      try {
+        setDraft(JSON.parse(saved));
+      } catch (e) {
+        console.error("Failed to load draft:", e);
+      }
     }
+    setHydrated(true);
+  }, []);
 
   useEffect(() => {
     if (!hydrated) return;
-    saveDraft(draft);
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(draft));
   }, [draft, hydrated]);
 
   // Auto-hash description when it changes
@@ -138,7 +175,7 @@ export default function ProposePage() {
       setIsHashing(true);
       try {
         const hash = await hashDescription(draft.description);
-        setDraft(d => ({ ...d, descriptionHash: hash }));
+        setDraft((d) => ({ ...d, descriptionHash: hash }));
       } catch (err) {
         console.error("Hashing failed:", err);
       } finally {
@@ -148,12 +185,6 @@ export default function ProposePage() {
 
     return () => clearTimeout(timer);
   }, [draft.description]);
-
-  useEffect(() => {
-    if (step === 4 && !successIdParam) {
-      router.replace("/propose?step=3");
-    }
-  }, [step, successIdParam, router]);
 
   const setStep = useCallback(
     (n: number) => {
@@ -165,6 +196,34 @@ export default function ProposePage() {
     [router, searchParams],
   );
 
+  async function handleIpfsUpload() {
+    if (!draft.description.trim()) {
+      setStepErrors(["Please enter a description first."]);
+      return;
+    }
+
+    const pinataKey = localStorage.getItem("pinata_jwt") || "";
+    if (!pinataKey) {
+      const key = prompt("Please enter your Pinata JWT (or API Key):");
+      if (!key) return;
+      localStorage.setItem("pinata_jwt", key);
+    }
+
+    setIsUploading(true);
+    setStepErrors([]);
+    try {
+      const { uri, hash } = await uploadProposalMetadata(draft.description, {
+        pinataApiKey: localStorage.getItem("pinata_jwt") || "",
+      });
+      setDraft((d) => ({ ...d, ipfsRef: uri, descriptionHash: hash }));
+    } catch (err) {
+      console.error("IPFS upload failed:", err);
+      setStepErrors([err instanceof Error ? err.message : "IPFS upload failed"]);
+    } finally {
+      setIsUploading(false);
+    }
+  }
+
   function validateStep1(): string[] {
     const err: string[] = [];
     const t = draft.title.trim();
@@ -175,9 +234,7 @@ export default function ProposePage() {
       err.push(`Description must be at least ${DESC_MIN} characters.`);
     }
     if (!isReasonableIpfsRef(draft.ipfsRef)) {
-      err.push(
-        "IPFS reference must be a gateway URL, ipfs:// link, or raw CID.",
-      );
+      err.push("IPFS reference must be a gateway URL, ipfs:// link, or raw CID.");
     }
     if (!draft.descriptionHash && draft.description.trim()) {
       err.push("Waiting for description hash computation...");
@@ -201,55 +258,20 @@ export default function ProposePage() {
     return err;
   }
 
-  function goNext() {
-    setStepErrors([]);
-    if (step === 1) {
-      const e = validateStep1();
-      if (e.length) {
-        setStepErrors(e);
-        return;
-      }
-    }
-    if (step === 2) {
-      const e = validateStep2();
-      if (e.length) {
-        setStepErrors(e);
-        return;
-      }
-    }
-    if (step === 3) {
-      if (!isConnected || !publicKey) {
-        setStepErrors(["Connect your wallet to submit."]);
-        return;
-      }
-      if (votes === null || threshold === null) {
-        setStepErrors(["Still loading voting power. Try again in a moment."]);
-        return;
-      }
-      if (votes < threshold) {
-        setStepErrors([
-          `Voting power is below the proposal threshold (${threshold.toString()} required).`,
-        ]);
-        return;
-      }
-      void submitProposal();
-      return;
-    }
-    setStep(step + 1);
-  }
-
-  async function submitProposal() {
+  async function runReviewLoads() {
     if (!clients || !publicKey) return;
-    setSubmitting(true);
-    setSubmitError(null);
+    setEstimate(null);
+    setEstimateErr(null);
     try {
-      // TODO issue #44: call GovernorClient.propose() with connected wallet.
-      // Placeholder — replace with real submission.
-      console.log("Submitting proposal:", { description, target, functionName, args });
-      await new Promise((r) => setTimeout(r, 1500));
-      router.push("/");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unknown error");
+      const [v, t, cp] = await Promise.all([
+        clients.votes.getVotes(publicKey),
+        clients.governor.proposalThreshold(),
+        clients.governor.canPropose(publicKey),
+      ]);
+      setVotes(v);
+      setThreshold(t);
+      setCanProposeResult(cp);
+
       const description = buildDescription(
         draft.title,
         draft.description,
@@ -259,76 +281,29 @@ export default function ProposePage() {
         draft.actions,
         clients.governorAddress,
       );
-      const id = await clients.governor.proposeWithSign(
+      const est = await clients.governor.estimateProposeResources(
         publicKey,
         description,
         draft.descriptionHash,
-        draft.ipfsRef, // Metadata URI
+        draft.ipfsRef,
         targets,
         fnNames,
         calldatas,
-        signTransaction,
       );
-      sessionStorage.removeItem(STORAGE_KEY);
-      setDraft({ title: "", description: "", descriptionHash: "", ipfsRef: "", actions: [] });
-      router.push(`/propose?step=4&id=${id.toString()}`);
-    } catch (e: unknown) {
-      setSubmitError(e instanceof Error ? e.message : "Submit failed");
-    } finally {
-      setSubmitting(false);
+      if (!est.ok) {
+        setEstimateErr(est.error ?? "Could not estimate proposal cost.");
+        return;
+      }
+      setEstimate({ cpuInsns: est.cpuInsns, memBytes: est.memBytes });
+    } catch (e) {
+      console.error("Review loads failed:", e);
     }
-  }
-
-  async function runReviewLoads() {
-    if (!clients || !publicKey) return;
-    setEstimate(null);
-    setEstimateErr(null);
-    const [v, t] = await Promise.all([
-      clients.votes.getVotes(publicKey),
-      clients.governor.proposalThreshold(),
-    ]);
-    setVotes(v);
-    setThreshold(t);
-
-    const description = buildDescription(
-      draft.title,
-      draft.description,
-      draft.ipfsRef,
-    );
-    const { targets, fnNames, calldatas } = buildPayload(
-      draft.actions,
-      clients.governorAddress,
-    );
-    const est = await clients.governor.estimateProposeResources(
-      publicKey,
-      description,
-      draft.descriptionHash,
-      draft.ipfsRef,
-      targets,
-      fnNames,
-      calldatas,
-    );
-    if (!est.ok) {
-      setEstimateErr(est.error ?? "Could not estimate proposal cost.");
-      return;
-    }
-    setEstimate({ cpuInsns: est.cpuInsns, memBytes: est.memBytes });
   }
 
   useEffect(() => {
     if (step !== 3 || !clients || !publicKey) return;
     void runReviewLoads();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    step,
-    publicKey,
-    clients?.governorAddress,
-    draft.title,
-    draft.description,
-    draft.descriptionHash,
-    draft.ipfsRef,
-    draft.actions,
-  ]);
+  }, [step, publicKey, clients, draft]);
 
   async function simulateAction(act: WizardAction) {
     if (!clients || !publicKey) return;
@@ -363,8 +338,7 @@ export default function ProposePage() {
             ? {
               ...x,
               simulateOk: false,
-              simulateError:
-                e instanceof Error ? e.message : "Simulation failed",
+              simulateError: e instanceof Error ? e.message : "Simulation failed",
             }
             : x,
         ),
@@ -372,6 +346,81 @@ export default function ProposePage() {
     } finally {
       setSimBusy(null);
     }
+  }
+
+  async function submitProposal() {
+    if (!clients || !publicKey || !signTransaction) return;
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      const description = buildDescription(
+        draft.title,
+        draft.description,
+        draft.ipfsRef,
+      );
+      const { targets, fnNames, calldatas } = buildPayload(
+        draft.actions,
+        clients.governorAddress,
+      );
+      const id = await clients.governor.proposeWithSign(
+        publicKey,
+        description,
+        draft.descriptionHash,
+        draft.ipfsRef,
+        targets,
+        fnNames,
+        calldatas,
+        signTransaction,
+      );
+      sessionStorage.removeItem(STORAGE_KEY);
+      setDraft({ title: "", description: "", descriptionHash: "", ipfsRef: "", actions: [] });
+      router.push(`/propose?step=4&id=${id.toString()}`);
+    } catch (e: unknown) {
+      setSubmitError(e instanceof Error ? e.message : "Submit failed");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  function goNext() {
+    setStepErrors([]);
+    if (step === 1) {
+      const e = validateStep1();
+      if (e.length) {
+        setStepErrors(e);
+        return;
+      }
+    }
+    if (step === 2) {
+      const e = validateStep2();
+      if (e.length) {
+        setStepErrors(e);
+        return;
+      }
+    }
+    if (step === 3) {
+      if (!isConnected || !publicKey) {
+        setStepErrors(["Connect your wallet to submit."]);
+        return;
+      }
+      if (votes === null || threshold === null) {
+        setStepErrors(["Still loading voting power. Try again in a moment."]);
+        return;
+      }
+      if (votes < threshold) {
+        setStepErrors([
+          `Voting power is below the proposal threshold (${(Number(threshold) / 10**7).toLocaleString()} required).`,
+        ]);
+        return;
+      }
+      if (canProposeResult && !canProposeResult.canPropose) {
+        setStepErrors([canProposeResult.reason ?? "Rate limit active."]);
+        return;
+      }
+      void submitProposal();
+      return;
+    }
+    setStep(step + 1);
   }
 
   if (!clients) {
@@ -473,8 +522,24 @@ export default function ProposePage() {
             </div>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1 flex items-center justify-between">
               Metadata Uri / IPFS Attachment
+              <button
+                type="button"
+                onClick={handleIpfsUpload}
+                disabled={isUploading || !draft.description.trim()}
+                className="text-[10px] bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 px-2 py-0.5 rounded hover:bg-indigo-100 disabled:opacity-50 flex items-center gap-1"
+              >
+                {isUploading ? (
+                  <>
+                    <Loader2 className="w-3 h-3 animate-spin" /> Uploading...
+                  </>
+                ) : (
+                  <>
+                    <Share2 className="w-3 h-3" /> Upload to IPFS
+                  </>
+                )}
+              </button>
             </label>
             <input
               type="text"
@@ -720,7 +785,8 @@ export default function ProposePage() {
                       {act.args.filter((r) => r.value.trim() !== "").length} argument(s) encoded as XDR
                     </p>
                   </div>
-                )}              </li>
+                )}
+              </li>
             ))}
           </ul>
         </div>
@@ -801,6 +867,21 @@ export default function ProposePage() {
                 </div>
               )}
 
+              {canProposeResult && !canProposeResult.canPropose && (
+                <div className="flex items-start gap-3 text-red-700 bg-red-50 dark:bg-red-900/20 dark:text-red-400 p-4 rounded-xl text-sm border border-red-100 dark:border-red-900/30">
+                  <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-semibold">Rate limit active</p>
+                    <p className="mt-1">{canProposeResult.reason}</p>
+                    {canProposeResult.availableAtLedger && (
+                      <p className="mt-2 text-xs opacity-80">
+                        Estimated availability: Ledger {canProposeResult.availableAtLedger}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {estimate && (
                 <div className="border-t border-gray-100 pt-6">
                   <p className="text-xs text-gray-400 font-medium uppercase mb-3">Resource Estimate</p>
@@ -827,140 +908,39 @@ export default function ProposePage() {
         </div>
       )}
 
-        <div>
-          <label
-            htmlFor="target"
-            className="block text-sm font-medium text-gray-700 mb-1"
-          >
-            Target Contract Address
-          </label>
-          <input
-            id="target"
-            type="text"
-            value={target}
-            onChange={(e) => setTarget(e.target.value)}
-            placeholder="CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA7"
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            required
-          />
-        </div>
-
-        <div>
-          <label
-            htmlFor="function"
-            className="block text-sm font-medium text-gray-700 mb-1"
-          >
-            Function Name
-          </label>
-          <input
-            id="function"
-            type="text"
-            value={functionName}
-            onChange={(e) => setFunctionName(e.target.value)}
-            placeholder="transfer"
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            required
-          />
-        </div>
-
-        <div>
-          <label
-            htmlFor="args"
-            className="block text-sm font-medium text-gray-700 mb-1"
-          >
-            Function Arguments (JSON or comma-separated)
-          </label>
-          <textarea
-            id="args"
-            rows={3}
-            value={args}
-            onChange={(e) => setArgs(e.target.value)}
-            placeholder='["recipient_address", 1000] or recipient_address, 1000'
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          />
-        </div>
-
-        {/* Simulation Results */}
-        {simulationResult && (
-          <div className={`rounded-lg p-4 ${simulationResult.success ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'}`}>
-            <h3 className={`font-medium mb-2 ${simulationResult.success ? 'text-green-800' : 'text-red-800'}`}>
-              Simulation {simulationResult.success ? 'Passed' : 'Failed'}
-            </h3>
-            {simulationResult.success ? (
-              <div className="text-sm text-green-700">
-                <p>Compute units required: {simulationResult.computeUnits?.toLocaleString()}</p>
-                <p className="mt-1">✓ Proposal execution should succeed</p>
-              </div>
-            ) : (
-              <div className="text-sm text-red-700">
-                <p>{simulationResult.error}</p>
-                <p className="mt-1">✗ Please fix the issues before submitting</p>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Action Buttons */}
-        <div className="flex gap-4">
-          <button
-            type="button"
-            onClick={handleSimulation}
-            disabled={simulating || !description.trim() || !target.trim() || !functionName.trim()}
-            className="flex-1 bg-gray-600 text-white py-2.5 rounded-lg font-medium hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            {simulating ? "Simulating..." : "Run Simulation"}
-          </button>
-
-          <button
-            type="submit"
-            disabled={submitting || !description.trim() || !target.trim() || !functionName.trim() || !simulationResult?.success}
-            className="flex-1 bg-indigo-600 text-white py-2.5 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            {submitting ? "Submitting..." : "Submit Proposal"}
-          </button>
       {step === 4 && successIdParam && (
-        <div className="text-center space-y-4 py-6">
-          <p className="text-green-800 font-semibold text-lg">Proposal created</p>
-          <p className="text-3xl font-mono font-bold text-gray-900">#{successIdParam}</p>
+        <div className="text-center space-y-4 py-12">
+          <div className="bg-green-50 dark:bg-green-900/20 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6">
+            <span className="text-3xl">🎉</span>
+          </div>
+          <p className="text-green-800 dark:text-green-400 font-semibold text-lg">Proposal created successfully</p>
+          <p className="text-5xl font-mono font-bold text-gray-900 dark:text-white my-4">#{successIdParam}</p>
+          <p className="text-gray-500 dark:text-gray-400 max-w-sm mx-auto mb-8">
+            Your proposal is now live and waiting for the voting delay to pass before members can cast votes.
+          </p>
           <div className="flex flex-wrap justify-center gap-3">
             <Link
               href={`/proposal/${successIdParam}`}
-              className="bg-indigo-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-indigo-700 transition-colors"
+              className="bg-indigo-600 text-white px-8 py-3 rounded-xl font-medium hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 dark:shadow-none"
             >
               View Proposal
             </Link>
             <button
               onClick={() => router.push("/")}
-              className="text-gray-600 px-6 py-2 rounded-lg font-medium hover:bg-gray-100 transition-colors"
+              className="text-gray-600 dark:text-gray-300 px-8 py-3 rounded-xl font-medium hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
             >
-              Back to list
+              Back to dashboard
             </button>
           </div>
         </div>
       )}
 
-        {error && (
-          <p className="text-red-600 text-sm">{error}</p>
-        )}
-
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-sm text-blue-800">
-          <strong>Simulation Required:</strong> Run simulation before submission to verify your proposal will execute successfully.
-        </div>
-      </form>
-      {stepErrors.length > 0 && (
-        <ul className="mt-6 text-sm text-red-700 bg-red-50 border border-red-100 rounded-lg px-3 py-2 list-disc list-inside">
-          {stepErrors.map((e) => (
-            <li key={e}>{e}</li>
-          ))}
-        </ul>
-      )}
-
       {step < 4 && (
-        <div className="mt-12 flex items-center justify-between pt-6 border-t border-gray-200">
+        <div className="mt-12 flex items-center justify-between pt-6 border-t border-gray-200 dark:border-gray-700">
           <button
             onClick={() => step > 1 && setStep(step - 1)}
             disabled={step === 1 || submitting}
-            className="text-sm font-medium text-gray-600 hover:text-gray-900 disabled:opacity-30"
+            className="text-sm font-medium text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white disabled:opacity-30"
           >
             Back
           </button>
@@ -976,7 +956,15 @@ export default function ProposePage() {
               disabled={submitting || (step === 3 && !reviewDataReady)}
               className="bg-indigo-600 text-white px-8 py-2.5 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors min-w-[120px]"
             >
-              {submitting ? "Submitting..." : step === 3 ? "Submit Proposal" : "Continue"}
+              {submitting ? (
+                <span className="flex items-center gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin" /> Submitting...
+                </span>
+              ) : step === 3 ? (
+                "Submit Proposal"
+              ) : (
+                "Continue"
+              )}
             </button>
           </div>
         </div>

@@ -19,7 +19,7 @@ import {
   ResponsiveContainer,
   CartesianGrid,
 } from "recharts";
-import { isValidStellarAddress, formatVotingPower } from "../../lib/utils";
+import { isValidStellarAddress, formatVotingPower } from "../../../lib/utils";
 
 interface VotingRecord {
   proposalId: bigint;
